@@ -19,7 +19,6 @@ import random
 import numpy as np
 import paddlex.utils.logging as logging
 import paddlex as pst
-from pycocotools.coco import COCO
 from .voc import VOCDetection
 from .dataset import is_pic
 
@@ -35,7 +34,7 @@ class CocoDetection(VOCDetection):
             系统的实际CPU核数设置`num_workers`: 如果CPU核数的一半大于8，则`num_workers`为8，否则为CPU核数的一半。
         buffer_size (int): 数据集中样本在预处理过程中队列的缓存长度，以样本数为单位。默认为100。
         parallel_method (str): 数据集中样本在预处理过程中并行处理的方式，支持'thread'
-            线程和'process'进程两种方式。默认为'thread'（Windows和Mac下会强制使用thread，该参数无效）。
+            线程和'process'进程两种方式。默认为'process'（Windows和Mac下会强制使用thread，该参数无效）。
         shuffle (bool): 是否需要对数据集中样本打乱顺序。默认为False。
     """
 
@@ -47,6 +46,8 @@ class CocoDetection(VOCDetection):
                  buffer_size=100,
                  parallel_method='process',
                  shuffle=False):
+        from pycocotools.coco import COCO
+
         super(VOCDetection, self).__init__(
             transforms=transforms,
             num_workers=num_workers,
@@ -99,7 +100,7 @@ class CocoDetection(VOCDetection):
             gt_score = np.ones((num_bbox, 1), dtype=np.float32)
             is_crowd = np.zeros((num_bbox, 1), dtype=np.int32)
             difficult = np.zeros((num_bbox, 1), dtype=np.int32)
-            gt_poly = [None] * num_bbox
+            gt_poly = None
 
             for i, box in enumerate(bboxes):
                 catid = box['category_id']
@@ -107,20 +108,24 @@ class CocoDetection(VOCDetection):
                 gt_bbox[i, :] = box['clean_bbox']
                 is_crowd[i][0] = box['iscrowd']
                 if 'segmentation' in box:
+                    if gt_poly is None:
+                        gt_poly = [None] * num_bbox
                     gt_poly[i] = box['segmentation']
 
             im_info = {
                 'im_id': np.array([img_id]).astype('int32'),
-                'origin_shape': np.array([im_h, im_w]).astype('int32'),
+                'image_shape': np.array([im_h, im_w]).astype('int32'),
             }
             label_info = {
                 'is_crowd': is_crowd,
                 'gt_class': gt_class,
                 'gt_bbox': gt_bbox,
                 'gt_score': gt_score,
-                'gt_poly': gt_poly,
                 'difficult': difficult
             }
+            if gt_poly is not None:
+                label_info['gt_poly'] = gt_poly
+
             coco_rec = (im_info, label_info)
             self.file_list.append([im_fname, coco_rec])
 

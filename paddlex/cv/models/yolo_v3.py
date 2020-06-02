@@ -80,6 +80,7 @@ class YOLOv3(BaseAPI):
         self.label_smooth = label_smooth
         self.sync_bn = True
         self.train_random_shapes = train_random_shapes
+        self.fixed_input_shape = None
 
     def _get_backbone(self, backbone_name):
         if backbone_name == 'DarkNet53':
@@ -95,9 +96,9 @@ class YOLOv3(BaseAPI):
         elif backbone_name == 'MobileNetV1':
             backbone = paddlex.cv.nets.MobileNetV1(norm_type='sync_bn')
         elif backbone_name.startswith('MobileNetV3'):
-            models_name = backbone_name.split('_')[1]
+            model_name = backbone_name.split('_')[1]
             backbone = paddlex.cv.nets.MobileNetV3(
-                norm_type='sync_bn', models_name=models_name)
+                norm_type='sync_bn', model_name=model_name)
         return backbone
 
     def build_net(self, mode='train'):
@@ -113,7 +114,8 @@ class YOLOv3(BaseAPI):
             nms_topk=self.nms_topk,
             nms_keep_topk=self.nms_keep_topk,
             nms_iou_threshold=self.nms_iou_threshold,
-            train_random_shapes=self.train_random_shapes)
+            train_random_shapes=self.train_random_shapes,
+            fixed_input_shape=self.fixed_input_shape)
         inputs = model.generate_inputs()
         model_out = model.build_net(inputs)
         outputs = OrderedDict([('bbox', model_out)])
@@ -162,7 +164,10 @@ class YOLOv3(BaseAPI):
               metric=None,
               use_vdl=False,
               sensitivities_file=None,
-              eval_metric_loss=0.05):
+              eval_metric_loss=0.05,
+              early_stop=False,
+              early_stop_patience=5,
+              resume_checkpoint=None):
         """训练。
 
         Args:
@@ -175,7 +180,7 @@ class YOLOv3(BaseAPI):
             log_interval_steps (int): 训练日志输出间隔（单位：迭代次数）。默认为10。
             save_dir (str): 模型保存路径。默认值为'output'。
             pretrain_weights (str): 若指定为路径时，则加载路径下预训练模型；若为字符串'IMAGENET'，
-                则自动下载在ImageNet图片数据上预训练的模型权重；若为None，则不使用预训练模型。默认为None。
+                则自动下载在ImageNet图片数据上预训练的模型权重；若为None，则不使用预训练模型。默认为'IMAGENET'。
             optimizer (paddle.fluid.optimizer): 优化器。当该参数为None时，使用默认优化器：
                 fluid.layers.piecewise_decay衰减策略，fluid.optimizer.Momentum优化方法。
             learning_rate (float): 默认优化器的学习率。默认为1.0/8000。
@@ -188,6 +193,10 @@ class YOLOv3(BaseAPI):
             sensitivities_file (str): 若指定为路径时，则加载路径下敏感度信息进行裁剪；若为字符串'DEFAULT'，
                 则自动下载在ImageNet图片数据上获得的敏感度信息进行裁剪；若为None，则不进行裁剪。默认为None。
             eval_metric_loss (float): 可容忍的精度损失。默认为0.05。
+            early_stop (bool): 是否使用提前终止训练策略。默认值为False。
+            early_stop_patience (int): 当使用提前终止训练策略时，如果验证集精度在`early_stop_patience`个epoch内
+                连续下降或持平，则终止训练。默认值为5。
+            resume_checkpoint (str): 恢复训练时指定上次训练保存的模型路径。若为None，则不会恢复训练。默认值为None。
 
         Raises:
             ValueError: 评估类型不在指定列表中。
@@ -198,11 +207,12 @@ class YOLOv3(BaseAPI):
         if metric is None:
             if isinstance(train_dataset, paddlex.datasets.CocoDetection):
                 metric = 'COCO'
-            elif isinstance(train_dataset, paddlex.datasets.VOCDetection):
+            elif isinstance(train_dataset, paddlex.datasets.VOCDetection) or \
+                    isinstance(train_dataset, paddlex.datasets.EasyDataDet):
                 metric = 'VOC'
             else:
                 raise ValueError(
-                    "train_dataset should be datasets.VOCDetection or datasets.COCODetection."
+                    "train_dataset should be datasets.VOCDetection or datasets.COCODetection or datasets.EasyDataDet."
                 )
         assert metric in ['COCO', 'VOC'], "Metric only support 'VOC' or 'COCO'"
         self.metric = metric
@@ -228,7 +238,8 @@ class YOLOv3(BaseAPI):
             pretrain_weights=pretrain_weights,
             save_dir=save_dir,
             sensitivities_file=sensitivities_file,
-            eval_metric_loss=eval_metric_loss)
+            eval_metric_loss=eval_metric_loss,
+            resume_checkpoint=resume_checkpoint)
         # 训练
         self.train_loop(
             num_epochs=num_epochs,
@@ -238,7 +249,9 @@ class YOLOv3(BaseAPI):
             save_interval_epochs=save_interval_epochs,
             log_interval_steps=log_interval_steps,
             save_dir=save_dir,
-            use_vdl=use_vdl)
+            use_vdl=use_vdl,
+            early_stop=early_stop,
+            early_stop_patience=early_stop_patience)
 
     def evaluate(self,
                  eval_dataset,
@@ -293,11 +306,10 @@ class YOLOv3(BaseAPI):
             images = np.array([d[0] for d in data])
             im_sizes = np.array([d[1] for d in data])
             feed_data = {'image': images, 'im_size': im_sizes}
-            outputs = self.exe.run(
-                self.test_prog,
-                feed=[feed_data],
-                fetch_list=list(self.test_outputs.values()),
-                return_numpy=False)
+            outputs = self.exe.run(self.test_prog,
+                                   feed=[feed_data],
+                                   fetch_list=list(self.test_outputs.values()),
+                                   return_numpy=False)
             res = {
                 'bbox': (np.array(outputs[0]),
                          outputs[0].recursive_sequence_lengths())
@@ -313,13 +325,13 @@ class YOLOv3(BaseAPI):
                 res['gt_label'] = (res_gt_label, [])
                 res['is_difficult'] = (res_is_difficult, [])
             results.append(res)
-            logging.debug("[EVAL] Epoch={}, Step={}/{}".format(
-                epoch_id, step + 1, total_steps))
+            logging.debug("[EVAL] Epoch={}, Step={}/{}".format(epoch_id, step +
+                                                               1, total_steps))
         box_ap_stats, eval_details = eval_results(
             results, metric, eval_dataset.coco_gt, with_background=False)
         evaluate_metrics = OrderedDict(
-            zip(['bbox_mmap' if metric == 'COCO' else 'bbox_map'],
-                box_ap_stats))
+            zip(['bbox_mmap'
+                 if metric == 'COCO' else 'bbox_map'], box_ap_stats))
         if return_details:
             return evaluate_metrics, eval_details
         return evaluate_metrics
@@ -333,7 +345,8 @@ class YOLOv3(BaseAPI):
 
         Returns:
             list: 预测结果列表，每个预测结果由预测框类别标签、
-              预测框类别名称、预测框坐标、预测框得分组成。
+              预测框类别名称、预测框坐标(坐标格式为[xmin, ymin, w, h]）、
+              预测框得分组成。
         """
         if transforms is None and not hasattr(self, 'test_transforms'):
             raise Exception("transforms need to be defined, now is None.")
@@ -346,14 +359,12 @@ class YOLOv3(BaseAPI):
             im, im_size = self.test_transforms(img_file)
         im = np.expand_dims(im, axis=0)
         im_size = np.expand_dims(im_size, axis=0)
-        outputs = self.exe.run(
-            self.test_prog,
-            feed={
-                'image': im,
-                'im_size': im_size
-            },
-            fetch_list=list(self.test_outputs.values()),
-            return_numpy=False)
+        outputs = self.exe.run(self.test_prog,
+                               feed={'image': im,
+                                     'im_size': im_size},
+                               fetch_list=list(self.test_outputs.values()),
+                               return_numpy=False,
+                               use_program_cache=True)
         res = {
             k: (np.array(v), v.recursive_sequence_lengths())
             for k, v in zip(list(self.test_outputs.keys()), outputs)

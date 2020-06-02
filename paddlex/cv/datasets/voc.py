@@ -17,8 +17,8 @@ import copy
 import os.path as osp
 import random
 import numpy as np
+from collections import OrderedDict
 import xml.etree.ElementTree as ET
-from pycocotools.coco import COCO
 import paddlex.utils.logging as logging
 from .dataset import Dataset
 from .dataset import is_pic
@@ -38,7 +38,7 @@ class VOCDetection(Dataset):
             一半。
         buffer_size (int): 数据集中样本在预处理过程中队列的缓存长度，以样本数为单位。默认为100。
         parallel_method (str): 数据集中样本在预处理过程中并行处理的方式，支持'thread'
-            线程和'process'进程两种方式。默认为'thread'（Windows和Mac下会强制使用thread，该参数无效）。
+            线程和'process'进程两种方式。默认为'process'（Windows和Mac下会强制使用thread，该参数无效）。
         shuffle (bool): 是否需要对数据集中样本打乱顺序。默认为False。
     """
 
@@ -51,6 +51,7 @@ class VOCDetection(Dataset):
                  buffer_size=100,
                  parallel_method='process',
                  shuffle=False):
+        from pycocotools.coco import COCO
         super(VOCDetection, self).__init__(
             transforms=transforms,
             num_workers=num_workers,
@@ -66,7 +67,7 @@ class VOCDetection(Dataset):
         annotations['categories'] = []
         annotations['annotations'] = []
 
-        cname2cid = {}
+        cname2cid = OrderedDict()
         label_id = 1
         with open(label_list, 'r', encoding=get_encoding(label_list)) as fr:
             for line in fr.readlines():
@@ -94,8 +95,8 @@ class VOCDetection(Dataset):
                 if not osp.isfile(xml_file):
                     continue
                 if not osp.exists(img_file):
-                    raise IOError(
-                        'The image file {} is not exist!'.format(img_file))
+                    raise IOError('The image file {} is not exist!'.format(
+                        img_file))
                 tree = ET.parse(xml_file)
                 if tree.find('id') is None:
                     im_id = np.array([ct])
@@ -112,7 +113,7 @@ class VOCDetection(Dataset):
                 is_crowd = np.zeros((len(objs), 1), dtype=np.int32)
                 difficult = np.zeros((len(objs), 1), dtype=np.int32)
                 for i, obj in enumerate(objs):
-                    cname = obj.find('name').text
+                    cname = obj.find('name').text.strip()
                     gt_class[i][0] = cname2cid[cname]
                     _difficult = int(obj.find('difficult').text)
                     x1 = float(obj.find('bndbox').find('xmin').text)
@@ -121,38 +122,32 @@ class VOCDetection(Dataset):
                     y2 = float(obj.find('bndbox').find('ymax').text)
                     x1 = max(0, x1)
                     y1 = max(0, y1)
-                    x2 = min(im_w - 1, x2)
-                    y2 = min(im_h - 1, y2)
+                    if im_w > 0.5 and im_h > 0.5:
+                        x2 = min(im_w - 1, x2)
+                        y2 = min(im_h - 1, y2)
                     gt_bbox[i] = [x1, y1, x2, y2]
                     is_crowd[i][0] = 0
                     difficult[i][0] = _difficult
                     annotations['annotations'].append({
-                        'iscrowd':
-                        0,
-                        'image_id':
-                        int(im_id[0]),
+                        'iscrowd': 0,
+                        'image_id': int(im_id[0]),
                         'bbox': [x1, y1, x2 - x1 + 1, y2 - y1 + 1],
-                        'area':
-                        float((x2 - x1 + 1) * (y2 - y1 + 1)),
-                        'category_id':
-                        cname2cid[cname],
-                        'id':
-                        ann_ct,
-                        'difficult':
-                        _difficult
+                        'area': float((x2 - x1 + 1) * (y2 - y1 + 1)),
+                        'category_id': cname2cid[cname],
+                        'id': ann_ct,
+                        'difficult': _difficult
                     })
                     ann_ct += 1
 
                 im_info = {
                     'im_id': im_id,
-                    'origin_shape': np.array([im_h, im_w]).astype('int32'),
+                    'image_shape': np.array([im_h, im_w]).astype('int32'),
                 }
                 label_info = {
                     'is_crowd': is_crowd,
                     'gt_class': gt_class,
                     'gt_bbox': gt_bbox,
                     'gt_score': gt_score,
-                    'gt_poly': [],
                     'difficult': difficult
                 }
                 voc_rec = (im_info, label_info)
@@ -160,14 +155,10 @@ class VOCDetection(Dataset):
                     self.file_list.append([img_file, voc_rec])
                     ct += 1
                     annotations['images'].append({
-                        'height':
-                        im_h,
-                        'width':
-                        im_w,
-                        'id':
-                        int(im_id[0]),
-                        'file_name':
-                        osp.split(img_file)[1]
+                        'height': im_h,
+                        'width': im_w,
+                        'id': int(im_id[0]),
+                        'file_name': osp.split(img_file)[1]
                     })
 
         if not len(self.file_list) > 0:
@@ -198,8 +189,7 @@ class VOCDetection(Dataset):
             else:
                 mix_pos = 0
             im_info['mixup'] = [
-                files[mix_pos][0],
-                copy.deepcopy(files[mix_pos][1][0]),
+                files[mix_pos][0], copy.deepcopy(files[mix_pos][1][0]),
                 copy.deepcopy(files[mix_pos][1][1])
             ]
             self._pos += 1

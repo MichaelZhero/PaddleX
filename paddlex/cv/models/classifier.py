@@ -27,7 +27,6 @@ from .base import BaseAPI
 
 class BaseClassifier(BaseAPI):
     """构建分类器，并实现其训练、评估、预测和模型导出。
-
     Args:
         model_name (str): 分类器的模型名字，取值范围为['ResNet18',
                           'ResNet34', 'ResNet50', 'ResNet101',
@@ -41,15 +40,23 @@ class BaseClassifier(BaseAPI):
         self.init_params = locals()
         super(BaseClassifier, self).__init__('classifier')
         if not hasattr(paddlex.cv.nets, str.lower(model_name)):
-            raise Exception(
-                "ERROR: There's no model named {}.".format(model_name))
+            raise Exception("ERROR: There's no model named {}.".format(
+                model_name))
         self.model_name = model_name
         self.labels = None
         self.num_classes = num_classes
+        self.fixed_input_shape = None
 
     def build_net(self, mode='train'):
-        image = fluid.data(
-            dtype='float32', shape=[None, 3, None, None], name='image')
+        if self.fixed_input_shape is not None:
+            input_shape = [
+                None, 3, self.fixed_input_shape[1], self.fixed_input_shape[0]
+            ]
+            image = fluid.data(
+                dtype='float32', shape=input_shape, name='image')
+        else:
+            image = fluid.data(
+                dtype='float32', shape=[None, 3, None, None], name='image')
         if mode != 'test':
             label = fluid.data(dtype='int64', shape=[None, 1], name='label')
         model = getattr(paddlex.cv.nets, str.lower(self.model_name))
@@ -57,6 +64,8 @@ class BaseClassifier(BaseAPI):
         softmax_out = fluid.layers.softmax(net_out, use_cudnn=False)
         inputs = OrderedDict([('image', image)])
         outputs = OrderedDict([('predict', softmax_out)])
+        if mode == 'test':
+            self.interpretation_feats = OrderedDict([('logits', net_out)])
         if mode != 'test':
             cost = fluid.layers.cross_entropy(input=softmax_out, label=label)
             avg_cost = fluid.layers.mean(cost)
@@ -102,9 +111,11 @@ class BaseClassifier(BaseAPI):
               lr_decay_gamma=0.1,
               use_vdl=False,
               sensitivities_file=None,
-              eval_metric_loss=0.05):
+              eval_metric_loss=0.05,
+              early_stop=False,
+              early_stop_patience=5,
+              resume_checkpoint=None):
         """训练。
-
         Args:
             num_epochs (int): 训练迭代轮数。
             train_dataset (paddlex.datasets): 训练数据读取器。
@@ -124,7 +135,10 @@ class BaseClassifier(BaseAPI):
             sensitivities_file (str): 若指定为路径时，则加载路径下敏感度信息进行裁剪；若为字符串'DEFAULT'，
                 则自动下载在ImageNet图片数据上获得的敏感度信息进行裁剪；若为None，则不进行裁剪。默认为None。
             eval_metric_loss (float): 可容忍的精度损失。默认为0.05。
-
+            early_stop (bool): 是否使用提前终止训练策略。默认值为False。
+            early_stop_patience (int): 当使用提前终止训练策略时，如果验证集精度在`early_stop_patience`个epoch内
+                连续下降或持平，则终止训练。默认值为5。
+            resume_checkpoint (str): 恢复训练时指定上次训练保存的模型路径。若为None，则不会恢复训练。默认值为None。
         Raises:
             ValueError: 模型从inference model进行加载。
         """
@@ -147,8 +161,8 @@ class BaseClassifier(BaseAPI):
             pretrain_weights=pretrain_weights,
             save_dir=save_dir,
             sensitivities_file=sensitivities_file,
-            eval_metric_loss=eval_metric_loss)
-
+            eval_metric_loss=eval_metric_loss,
+            resume_checkpoint=resume_checkpoint)
         # 训练
         self.train_loop(
             num_epochs=num_epochs,
@@ -158,7 +172,9 @@ class BaseClassifier(BaseAPI):
             save_interval_epochs=save_interval_epochs,
             log_interval_steps=log_interval_steps,
             save_dir=save_dir,
-            use_vdl=use_vdl)
+            use_vdl=use_vdl,
+            early_stop=early_stop,
+            early_stop_patience=early_stop_patience)
 
     def evaluate(self,
                  eval_dataset,
@@ -166,13 +182,11 @@ class BaseClassifier(BaseAPI):
                  epoch_id=None,
                  return_details=False):
         """评估。
-
         Args:
             eval_dataset (paddlex.datasets): 验证数据读取器。
             batch_size (int): 验证数据批大小。默认为1。
             epoch_id (int): 当前评估模型所在的训练轮数。
             return_details (bool): 是否返回详细信息。
-
         Returns:
           dict: 当return_details为False时，返回dict, 包含关键字：'acc1'、'acc5'，
               分别表示最大值的accuracy、前5个最大值的accuracy。
@@ -204,15 +218,14 @@ class BaseClassifier(BaseAPI):
                 num_pad_samples = batch_size - num_samples
                 pad_images = np.tile(images[0:1], (num_pad_samples, 1, 1, 1))
                 images = np.concatenate([images, pad_images])
-            outputs = self.exe.run(
-                self.parallel_test_prog,
-                feed={'image': images},
-                fetch_list=list(self.test_outputs.values()))
+            outputs = self.exe.run(self.parallel_test_prog,
+                                   feed={'image': images},
+                                   fetch_list=list(self.test_outputs.values()))
             outputs = [outputs[0][:num_samples]]
             true_labels.extend(labels)
             pred_scores.extend(outputs[0].tolist())
-            logging.debug("[EVAL] Epoch={}, Step={}/{}".format(
-                epoch_id, step + 1, total_steps))
+            logging.debug("[EVAL] Epoch={}, Step={}/{}".format(epoch_id, step +
+                                                               1, total_steps))
 
         pred_top1_label = np.argsort(pred_scores)[:, -1]
         pred_topk_label = np.argsort(pred_scores)[:, -k:]
@@ -231,12 +244,10 @@ class BaseClassifier(BaseAPI):
 
     def predict(self, img_file, transforms=None, topk=1):
         """预测。
-
         Args:
             img_file (str): 预测图像路径。
             transforms (paddlex.cls.transforms): 数据预处理操作。
             topk (int): 预测时前k个最大值。
-
         Returns:
             list: 其中元素均为字典。字典的关键字为'category_id'、'category'、'score'，
             分别对应预测类别id、预测类别标签、预测得分。
@@ -251,10 +262,10 @@ class BaseClassifier(BaseAPI):
             self.arrange_transforms(
                 transforms=self.test_transforms, mode='test')
             im = self.test_transforms(img_file)
-        result = self.exe.run(
-            self.test_prog,
-            feed={'image': im},
-            fetch_list=list(self.test_outputs.values()))
+        result = self.exe.run(self.test_prog,
+                              feed={'image': im},
+                              fetch_list=list(self.test_outputs.values()),
+                              use_program_cache=True)
         pred_label = np.argsort(result[0][0])[::-1][:true_topk]
         res = [{
             'category_id': l,
@@ -388,3 +399,9 @@ class ShuffleNetV2(BaseClassifier):
     def __init__(self, num_classes=1000):
         super(ShuffleNetV2, self).__init__(
             model_name='ShuffleNetV2', num_classes=num_classes)
+
+
+class HRNet_W18(BaseClassifier):
+    def __init__(self, num_classes=1000):
+        super(HRNet_W18, self).__init__(
+            model_name='HRNet_W18', num_classes=num_classes)

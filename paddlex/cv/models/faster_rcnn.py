@@ -32,7 +32,7 @@ class FasterRCNN(BaseAPI):
     Args:
         num_classes (int): 包含了背景类的类别数。默认为81。
         backbone (str): FasterRCNN的backbone网络，取值范围为['ResNet18', 'ResNet50',
-            'ResNet50vd', 'ResNet101', 'ResNet101vd']。默认为'ResNet50'。
+            'ResNet50_vd', 'ResNet101', 'ResNet101_vd', 'HRNet_W18']。默认为'ResNet50'。
         with_fpn (bool): 是否使用FPN结构。默认为True。
         aspect_ratios (list): 生成anchor高宽比的可选值。默认为[0.5, 1.0, 2.0]。
         anchor_sizes (list): 生成anchor大小的可选值。默认为[32, 64, 128, 256, 512]。
@@ -47,7 +47,8 @@ class FasterRCNN(BaseAPI):
         self.init_params = locals()
         super(FasterRCNN, self).__init__('detector')
         backbones = [
-            'ResNet18', 'ResNet50', 'ResNet50vd', 'ResNet101', 'ResNet101vd'
+            'ResNet18', 'ResNet50', 'ResNet50_vd', 'ResNet101', 'ResNet101_vd',
+            'HRNet_W18'
         ]
         assert backbone in backbones, "backbone should be one of {}".format(
             backbones)
@@ -57,6 +58,7 @@ class FasterRCNN(BaseAPI):
         self.aspect_ratios = aspect_ratios
         self.anchor_sizes = anchor_sizes
         self.labels = None
+        self.fixed_input_shape = None
 
     def _get_backbone(self, backbone_name):
         norm_type = None
@@ -66,7 +68,7 @@ class FasterRCNN(BaseAPI):
         elif backbone_name == 'ResNet50':
             layers = 50
             variant = 'b'
-        elif backbone_name == 'ResNet50vd':
+        elif backbone_name == 'ResNet50_vd':
             layers = 50
             variant = 'd'
             norm_type = 'affine_channel'
@@ -74,10 +76,16 @@ class FasterRCNN(BaseAPI):
             layers = 101
             variant = 'b'
             norm_type = 'affine_channel'
-        elif backbone_name == 'ResNet101vd':
+        elif backbone_name == 'ResNet101_vd':
             layers = 101
             variant = 'd'
             norm_type = 'affine_channel'
+        elif backbone_name == 'HRNet_W18':
+            backbone = paddlex.cv.nets.hrnet.HRNet(
+                width=18, freeze_norm=True, norm_decay=0., freeze_at=0)
+            if self.with_fpn is False:
+                self.with_fpn = True
+            return backbone
         if self.with_fpn:
             backbone = paddlex.cv.nets.resnet.ResNet(
                 norm_type='bn' if norm_type is None else norm_type,
@@ -109,18 +117,19 @@ class FasterRCNN(BaseAPI):
             aspect_ratios=self.aspect_ratios,
             anchor_sizes=self.anchor_sizes,
             train_pre_nms_top_n=train_pre_nms_top_n,
-            test_pre_nms_top_n=test_pre_nms_top_n)
+            test_pre_nms_top_n=test_pre_nms_top_n,
+            fixed_input_shape=self.fixed_input_shape)
         inputs = model.generate_inputs()
         if mode == 'train':
             model_out = model.build_net(inputs)
             loss = model_out['loss']
             self.optimizer.minimize(loss)
-            outputs = OrderedDict([('loss', model_out['loss']),
-                                   ('loss_cls', model_out['loss_cls']),
-                                   ('loss_bbox', model_out['loss_bbox']),
-                                   ('loss_rpn_cls', model_out['loss_rpn_cls']),
-                                   ('loss_rpn_bbox',
-                                    model_out['loss_rpn_bbox'])])
+            outputs = OrderedDict(
+                [('loss', model_out['loss']),
+                 ('loss_cls', model_out['loss_cls']),
+                 ('loss_bbox', model_out['loss_bbox']),
+                 ('loss_rpn_cls', model_out['loss_rpn_cls']), (
+                     'loss_rpn_bbox', model_out['loss_rpn_bbox'])])
         else:
             outputs = model.build_net(inputs)
         return inputs, outputs
@@ -163,7 +172,10 @@ class FasterRCNN(BaseAPI):
               lr_decay_epochs=[8, 11],
               lr_decay_gamma=0.1,
               metric=None,
-              use_vdl=False):
+              use_vdl=False,
+              early_stop=False,
+              early_stop_patience=5,
+              resume_checkpoint=None):
         """训练。
 
         Args:
@@ -176,7 +188,7 @@ class FasterRCNN(BaseAPI):
             log_interval_steps (int): 训练日志输出间隔（单位：迭代次数）。默认为20。
             save_dir (str): 模型保存路径。默认值为'output'。
             pretrain_weights (str): 若指定为路径时，则加载路径下预训练模型；若为字符串'IMAGENET'，
-                则自动下载在ImageNet图片数据上预训练的模型权重；若为None，则不使用预训练模型。默认为None。
+                则自动下载在ImageNet图片数据上预训练的模型权重；若为None，则不使用预训练模型。默认为'IMAGENET'。
             optimizer (paddle.fluid.optimizer): 优化器。当该参数为None时，使用默认优化器：
                 fluid.layers.piecewise_decay衰减策略，fluid.optimizer.Momentum优化方法。
             learning_rate (float): 默认优化器的初始学习率。默认为0.0025。
@@ -186,6 +198,10 @@ class FasterRCNN(BaseAPI):
             lr_decay_gamma (float): 默认优化器的学习率衰减率。默认为0.1。
             metric (bool): 训练过程中评估的方式，取值范围为['COCO', 'VOC']。默认值为None。
             use_vdl (bool): 是否使用VisualDL进行可视化。默认值为False。
+            early_stop (bool): 是否使用提前终止训练策略。默认值为False。
+            early_stop_patience (int): 当使用提前终止训练策略时，如果验证集精度在`early_stop_patience`个epoch内
+                连续下降或持平，则终止训练。默认值为5。
+            resume_checkpoint (str): 恢复训练时指定上次训练保存的模型路径。若为None，则不会恢复训练。默认值为None。
 
         Raises:
             ValueError: 评估类型不在指定列表中。
@@ -194,11 +210,12 @@ class FasterRCNN(BaseAPI):
         if metric is None:
             if isinstance(train_dataset, paddlex.datasets.CocoDetection):
                 metric = 'COCO'
-            elif isinstance(train_dataset, paddlex.datasets.VOCDetection):
+            elif isinstance(train_dataset, paddlex.datasets.VOCDetection) or \
+                    isinstance(train_dataset, paddlex.datasets.EasyDataDet):
                 metric = 'VOC'
             else:
                 raise ValueError(
-                    "train_dataset should be datasets.VOCDetection or datasets.COCODetection."
+                    "train_dataset should be datasets.VOCDetection or datasets.COCODetection or datasets.EasyDataDet."
                 )
         assert metric in ['COCO', 'VOC'], "Metric only support 'VOC' or 'COCO'"
         self.metric = metric
@@ -217,13 +234,17 @@ class FasterRCNN(BaseAPI):
         # 构建训练、验证、测试网络
         self.build_program()
         fuse_bn = True
-        if self.with_fpn and self.backbone in ['ResNet18', 'ResNet50']:
+        if self.with_fpn and self.backbone in [
+                'ResNet18', 'ResNet50', 'HRNet_W18'
+        ]:
             fuse_bn = False
         self.net_initialize(
             startup_prog=fluid.default_startup_program(),
             pretrain_weights=pretrain_weights,
             fuse_bn=fuse_bn,
-            save_dir=save_dir)
+            save_dir=save_dir,
+            resume_checkpoint=resume_checkpoint)
+
         # 训练
         self.train_loop(
             num_epochs=num_epochs,
@@ -233,7 +254,9 @@ class FasterRCNN(BaseAPI):
             save_interval_epochs=save_interval_epochs,
             log_interval_steps=log_interval_steps,
             save_dir=save_dir,
-            use_vdl=use_vdl)
+            use_vdl=use_vdl,
+            early_stop=early_stop,
+            early_stop_patience=early_stop_patience)
 
     def evaluate(self,
                  eval_dataset,
@@ -245,7 +268,7 @@ class FasterRCNN(BaseAPI):
 
         Args:
             eval_dataset (paddlex.datasets): 验证数据读取器。
-            batch_size (int): 验证数据批大小。默认为1。
+            batch_size (int): 验证数据批大小。默认为1。当前只支持设置为1。
             epoch_id (int): 当前评估模型所在的训练轮数。
             metric (bool): 训练过程中评估的方式，取值范围为['COCO', 'VOC']。默认为None，
                 根据用户传入的Dataset自动选择，如为VOCDetection，则metric为'VOC';
@@ -274,7 +297,11 @@ class FasterRCNN(BaseAPI):
                         "eval_dataset should be datasets.VOCDetection or datasets.COCODetection."
                     )
         assert metric in ['COCO', 'VOC'], "Metric only support 'VOC' or 'COCO'"
-
+        if batch_size > 1:
+            batch_size = 1
+            logging.warning(
+                "Faster RCNN supports batch_size=1 only during evaluating, so batch_size is forced to be set to 1."
+            )
         dataset = eval_dataset.generator(
             batch_size=batch_size, drop_last=False)
 
@@ -292,11 +319,10 @@ class FasterRCNN(BaseAPI):
                 'im_info': im_infos,
                 'im_shape': im_shapes,
             }
-            outputs = self.exe.run(
-                self.test_prog,
-                feed=[feed_data],
-                fetch_list=list(self.test_outputs.values()),
-                return_numpy=False)
+            outputs = self.exe.run(self.test_prog,
+                                   feed=[feed_data],
+                                   fetch_list=list(self.test_outputs.values()),
+                                   return_numpy=False)
             res = {
                 'bbox': (np.array(outputs[0]),
                          outputs[0].recursive_sequence_lengths())
@@ -321,13 +347,13 @@ class FasterRCNN(BaseAPI):
                 res['is_difficult'] = (np.array(res_is_difficult),
                                        [res_is_difficult_lod])
             results.append(res)
-            logging.debug("[EVAL] Epoch={}, Step={}/{}".format(
-                epoch_id, step + 1, total_steps))
+            logging.debug("[EVAL] Epoch={}, Step={}/{}".format(epoch_id, step +
+                                                               1, total_steps))
         box_ap_stats, eval_details = eval_results(
             results, metric, eval_dataset.coco_gt, with_background=True)
         metrics = OrderedDict(
-            zip(['bbox_mmap' if metric == 'COCO' else 'bbox_map'],
-                box_ap_stats))
+            zip(['bbox_mmap'
+                 if metric == 'COCO' else 'bbox_map'], box_ap_stats))
         if return_details:
             return metrics, eval_details
         return metrics
@@ -341,7 +367,8 @@ class FasterRCNN(BaseAPI):
 
         Returns:
             list: 预测结果列表，每个预测结果由预测框类别标签、
-              预测框类别名称、预测框坐标、预测框得分组成。
+              预测框类别名称、预测框坐标(坐标格式为[xmin, ymin, w, h]）、
+              预测框得分组成。
         """
         if transforms is None and not hasattr(self, 'test_transforms'):
             raise Exception("transforms need to be defined, now is None.")
@@ -355,15 +382,15 @@ class FasterRCNN(BaseAPI):
         im = np.expand_dims(im, axis=0)
         im_resize_info = np.expand_dims(im_resize_info, axis=0)
         im_shape = np.expand_dims(im_shape, axis=0)
-        outputs = self.exe.run(
-            self.test_prog,
-            feed={
-                'image': im,
-                'im_info': im_resize_info,
-                'im_shape': im_shape
-            },
-            fetch_list=list(self.test_outputs.values()),
-            return_numpy=False)
+        outputs = self.exe.run(self.test_prog,
+                               feed={
+                                   'image': im,
+                                   'im_info': im_resize_info,
+                                   'im_shape': im_shape
+                               },
+                               fetch_list=list(self.test_outputs.values()),
+                               return_numpy=False,
+                               use_program_cache=True)
         res = {
             k: (np.array(v), v.recursive_sequence_lengths())
             for k, v in zip(list(self.test_outputs.keys()), outputs)

@@ -48,7 +48,6 @@ class DeepLabv3p(BaseAPI):
             自行计算相应的权重，每一类的权重为：每类的比例 * num_classes。class_weight取默认值None时，各类的权重1，
             即平时使用的交叉熵损失函数。
         ignore_index (int): label上忽略的值，label为ignore_index的像素不参与损失函数的计算。默认255。
-
     Raises:
         ValueError: use_bce_loss或use_dice_loss为真且num_calsses > 2。
         ValueError: backbone取值不在['Xception65', 'Xception41', 'MobileNetV2_x0.25',
@@ -118,6 +117,7 @@ class DeepLabv3p(BaseAPI):
         self.enable_decoder = enable_decoder
         self.labels = None
         self.sync_bn = True
+        self.fixed_input_shape = None
 
     def _get_backbone(self, backbone):
         def mobilenetv2(backbone):
@@ -182,18 +182,14 @@ class DeepLabv3p(BaseAPI):
             use_bce_loss=self.use_bce_loss,
             use_dice_loss=self.use_dice_loss,
             class_weight=self.class_weight,
-            ignore_index=self.ignore_index)
+            ignore_index=self.ignore_index,
+            fixed_input_shape=self.fixed_input_shape)
         inputs = model.generate_inputs()
         model_out = model.build_net(inputs)
         outputs = OrderedDict()
         if mode == 'train':
             self.optimizer.minimize(model_out)
             outputs['loss'] = model_out
-        elif mode == 'eval':
-            outputs['loss'] = model_out[0]
-            outputs['pred'] = model_out[1]
-            outputs['label'] = model_out[2]
-            outputs['mask'] = model_out[3]
         else:
             outputs['pred'] = model_out[0]
             outputs['logit'] = model_out[1]
@@ -231,7 +227,10 @@ class DeepLabv3p(BaseAPI):
               lr_decay_power=0.9,
               use_vdl=False,
               sensitivities_file=None,
-              eval_metric_loss=0.05):
+              eval_metric_loss=0.05,
+              early_stop=False,
+              early_stop_patience=5,
+              resume_checkpoint=None):
         """训练。
 
         Args:
@@ -252,6 +251,10 @@ class DeepLabv3p(BaseAPI):
             sensitivities_file (str): 若指定为路径时，则加载路径下敏感度信息进行裁剪；若为字符串'DEFAULT'，
                 则自动下载在ImageNet图片数据上获得的敏感度信息进行裁剪；若为None，则不进行裁剪。默认为None。
             eval_metric_loss (float): 可容忍的精度损失。默认为0.05。
+            early_stop (bool): 是否使用提前终止训练策略。默认值为False。
+            early_stop_patience (int): 当使用提前终止训练策略时，如果验证集精度在`early_stop_patience`个epoch内
+                连续下降或持平，则终止训练。默认值为5。
+            resume_checkpoint (str): 恢复训练时指定上次训练保存的模型路径。若为None，则不会恢复训练。默认值为None。
 
         Raises:
             ValueError: 模型从inference model进行加载。
@@ -278,7 +281,8 @@ class DeepLabv3p(BaseAPI):
             pretrain_weights=pretrain_weights,
             save_dir=save_dir,
             sensitivities_file=sensitivities_file,
-            eval_metric_loss=eval_metric_loss)
+            eval_metric_loss=eval_metric_loss,
+            resume_checkpoint=resume_checkpoint)
         # 训练
         self.train_loop(
             num_epochs=num_epochs,
@@ -288,7 +292,9 @@ class DeepLabv3p(BaseAPI):
             save_interval_epochs=save_interval_epochs,
             log_interval_steps=log_interval_steps,
             save_dir=save_dir,
-            use_vdl=use_vdl)
+            use_vdl=use_vdl,
+            early_stop=early_stop,
+            early_stop_patience=early_stop_patience)
 
     def evaluate(self,
                  eval_dataset,
@@ -325,18 +331,27 @@ class DeepLabv3p(BaseAPI):
         for step, data in tqdm.tqdm(
                 enumerate(data_generator()), total=total_steps):
             images = np.array([d[0] for d in data])
-            labels = np.array([d[1] for d in data])
+
+            _, _, im_h, im_w = images.shape
+            labels = list()
+            for d in data:
+                padding_label = np.zeros(
+                    (1, im_h, im_w)).astype('int64') + self.ignore_index
+                _, label_h, label_w = d[1].shape
+                padding_label[:, :label_h, :label_w] = d[1]
+                labels.append(padding_label)
+            labels = np.array(labels)
+
             num_samples = images.shape[0]
             if num_samples < batch_size:
                 num_pad_samples = batch_size - num_samples
                 pad_images = np.tile(images[0:1], (num_pad_samples, 1, 1, 1))
                 images = np.concatenate([images, pad_images])
             feed_data = {'image': images}
-            outputs = self.exe.run(
-                self.parallel_test_prog,
-                feed=feed_data,
-                fetch_list=list(self.test_outputs.values()),
-                return_numpy=True)
+            outputs = self.exe.run(self.parallel_test_prog,
+                                   feed=feed_data,
+                                   fetch_list=list(self.test_outputs.values()),
+                                   return_numpy=True)
             pred = outputs[0]
             if num_samples < batch_size:
                 pred = pred[0:num_samples]
@@ -353,8 +368,7 @@ class DeepLabv3p(BaseAPI):
 
         metrics = OrderedDict(
             zip(['miou', 'category_iou', 'macc', 'category_acc', 'kappa'],
-                [miou, category_iou, macc, category_acc,
-                 conf_mat.kappa()]))
+                [miou, category_iou, macc, category_acc, conf_mat.kappa()]))
         if return_details:
             eval_details = {
                 'confusion_matrix': conf_mat.confusion_matrix.tolist()
@@ -383,19 +397,25 @@ class DeepLabv3p(BaseAPI):
                 transforms=self.test_transforms, mode='test')
             im, im_info = self.test_transforms(im_file)
         im = np.expand_dims(im, axis=0)
-        result = self.exe.run(
-            self.test_prog,
-            feed={'image': im},
-            fetch_list=list(self.test_outputs.values()))
+        result = self.exe.run(self.test_prog,
+                              feed={'image': im},
+                              fetch_list=list(self.test_outputs.values()),
+                              use_program_cache=True)
         pred = result[0]
         pred = np.squeeze(pred).astype('uint8')
-        keys = list(im_info.keys())
-        for k in keys[::-1]:
-            if k == 'shape_before_resize':
-                h, w = im_info[k][0], im_info[k][1]
+        logit = result[1]
+        logit = np.squeeze(logit)
+        logit = np.transpose(logit, (1, 2, 0))
+        for info in im_info[::-1]:
+            if info[0] == 'resize':
+                w, h = info[1][1], info[1][0]
                 pred = cv2.resize(pred, (w, h), cv2.INTER_NEAREST)
-            elif k == 'shape_before_padding':
-                h, w = im_info[k][0], im_info[k][1]
+                logit = cv2.resize(logit, (w, h), cv2.INTER_LINEAR)
+            elif info[0] == 'padding':
+                w, h = info[1][1], info[1][0]
                 pred = pred[0:h, 0:w]
-
-        return {'label_map': pred, 'score_map': result[1]}
+                logit = logit[0:h, 0:w, :]
+            else:
+                raise Exception("Unexpected info '{}' in im_info".format(info[
+                    0]))
+        return {'label_map': pred, 'score_map': logit}

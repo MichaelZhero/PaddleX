@@ -115,6 +115,21 @@ def channel_prune(program, prune_names, prune_ratios, place, only_graph=False):
     Returns:
         paddle.fluid.Program: 裁剪后的Program。
     """
+    prog_var_shape_dict = {}
+    for var in program.list_vars():
+        try:
+            prog_var_shape_dict[var.name] = var.shape
+        except Exception:
+            pass
+    index = 0
+    for param, ratio in zip(prune_names, prune_ratios):
+        origin_num = prog_var_shape_dict[param][0]
+        pruned_num = int(round(origin_num * ratio))
+        while origin_num == pruned_num:
+            ratio -= 0.1
+            pruned_num = int(round(origin_num * (ratio)))
+            prune_ratios[index] = ratio
+        index += 1
     scope = fluid.global_scope()
     pruner = Pruner()
     program, _, _ = pruner.prune(
@@ -143,6 +158,7 @@ def prune_program(model, prune_params_ratios=None):
         prune_params_ratios (dict): 由裁剪参数名和裁剪率组成的字典，当为None时
             使用默认裁剪参数名和裁剪率。默认为None。
     """
+    assert model.status == 'Normal', 'Only the models saved while training are supported!'
     place = model.places[0]
     train_prog = model.train_prog
     eval_prog = model.test_prog
@@ -220,6 +236,7 @@ def cal_params_sensitivities(model, save_file, eval_dataset, batch_size=8):
 
             其中``weight_0``是卷积Kernel名；``sensitivities['weight_0']``是一个字典，key是裁剪率，value是敏感度。
     """
+    assert model.status == 'Normal', 'Only the models saved while training are supported!'
     if os.path.exists(save_file):
         os.remove(save_file)
 
@@ -266,8 +283,8 @@ def get_params_ratios(sensitivities_file, eval_metric_loss=0.05):
     if not osp.exists(sensitivities_file):
         raise Exception('The sensitivities file is not exists!')
     sensitivitives = paddleslim.prune.load_sensitivities(sensitivities_file)
-    params_ratios = paddleslim.prune.get_ratios_by_loss(sensitivitives,
-                                                        eval_metric_loss)
+    params_ratios = paddleslim.prune.get_ratios_by_loss(
+        sensitivitives, eval_metric_loss)
     return params_ratios
 
 
@@ -286,6 +303,19 @@ def cal_model_size(program, place, sensitivities_file, eval_metric_loss=0.05):
     """
     prune_params_ratios = get_params_ratios(sensitivities_file,
                                             eval_metric_loss)
+    prog_var_shape_dict = {}
+    for var in program.list_vars():
+        try:
+            prog_var_shape_dict[var.name] = var.shape
+        except Exception:
+            pass
+    for param, ratio in prune_params_ratios.items():
+        origin_num = prog_var_shape_dict[param][0]
+        pruned_num = int(round(origin_num * ratio))
+        while origin_num == pruned_num:
+            ratio -= 0.1
+            pruned_num = int(round(origin_num * (ratio)))
+            prune_params_ratios[param] = ratio
     prune_program = channel_prune(
         program,
         list(prune_params_ratios.keys()),

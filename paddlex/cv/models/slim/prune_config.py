@@ -19,6 +19,8 @@ import paddle.fluid as fluid
 import paddlex
 
 sensitivities_data = {
+    'AlexNet':
+    'https://bj.bcebos.com/paddlex/slim_prune/alexnet_sensitivities.data',
     'ResNet18':
     'https://bj.bcebos.com/paddlex/slim_prune/resnet18.sensitivities',
     'ResNet34':
@@ -41,6 +43,10 @@ sensitivities_data = {
     'https://bj.bcebos.com/paddlex/slim_prune/mobilenetv3_large.sensitivities',
     'MobileNetV3_small':
     'https://bj.bcebos.com/paddlex/slim_prune/mobilenetv3_small.sensitivities',
+    'MobileNetV3_large_ssld':
+    'https://bj.bcebos.com/paddlex/slim_prune/mobilenetv3_large_ssld_sensitivities.data',
+    'MobileNetV3_small_ssld':
+    'https://bj.bcebos.com/paddlex/slim_prune/mobilenetv3_small_ssld_sensitivities.data',
     'DenseNet121':
     'https://bj.bcebos.com/paddlex/slim_prune/densenet121.sensitivities',
     'DenseNet161':
@@ -51,6 +57,8 @@ sensitivities_data = {
     'https://bj.bcebos.com/paddlex/slim_prune/xception41.sensitivities',
     'Xception65':
     'https://bj.bcebos.com/paddlex/slim_prune/xception65.sensitivities',
+    'ShuffleNetV2':
+    'https://bj.bcebos.com/paddlex/slim_prune/shufflenetv2_sensitivities.data',
     'YOLOv3_MobileNetV1':
     'https://bj.bcebos.com/paddlex/slim_prune/yolov3_mobilenetv1.sensitivities',
     'YOLOv3_MobileNetV3_large':
@@ -142,13 +150,39 @@ def get_prune_params(model):
     program = model.test_prog
     if model_type.startswith('ResNet') or \
             model_type.startswith('DenseNet') or \
-            model_type.startswith('DarkNet'):
+            model_type.startswith('DarkNet') or \
+            model_type.startswith('AlexNet') or \
+            model_type.startswith('ShuffleNetV2'):
         for block in program.blocks:
             for param in block.all_parameters():
                 pd_var = fluid.global_scope().find_var(param.name)
                 pd_param = pd_var.get_tensor()
                 if len(np.array(pd_param).shape) == 4:
                     prune_names.append(param.name)
+        if model_type == 'AlexNet':
+            prune_names.remove('conv5_weights')
+        if model_type == 'ShuffleNetV2':
+            not_prune_names = ['stage_2_1_conv5_weights',
+                        'stage_2_1_conv3_weights',
+                        'stage_2_2_conv3_weights',
+                        'stage_2_3_conv3_weights',
+                        'stage_2_4_conv3_weights',
+                        'stage_3_1_conv5_weights',
+                        'stage_3_1_conv3_weights',
+                        'stage_3_2_conv3_weights',
+                        'stage_3_3_conv3_weights',
+                        'stage_3_4_conv3_weights',
+                        'stage_3_5_conv3_weights',
+                        'stage_3_6_conv3_weights',
+                        'stage_3_7_conv3_weights',
+                        'stage_3_8_conv3_weights',
+                        'stage_4_1_conv5_weights',
+                        'stage_4_1_conv3_weights',
+                        'stage_4_2_conv3_weights',
+                        'stage_4_3_conv3_weights',
+                        'stage_4_4_conv3_weights',]
+            for name in not_prune_names:
+                 prune_names.remove(name)
     elif model_type == "MobileNetV1":
         prune_names.append("conv1_weights")
         for param in program.global_block().all_parameters():
@@ -162,7 +196,7 @@ def get_prune_params(model):
                 continue
             prune_names.append(param.name)
     elif model_type.startswith("MobileNetV3"):
-        if model_type == 'MobileNetV3_small':
+        if model_type.startswith('MobileNetV3_small'):
             expand_prune_id = [3, 4]
         else:
             expand_prune_id = [2, 3, 4, 8, 9, 11]

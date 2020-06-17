@@ -1,16 +1,16 @@
-#copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
-#
-#Licensed under the Apache License, Version 2.0 (the "License");
-#you may not use this file except in compliance with the License.
-#You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from __future__ import absolute_import
 import paddle.fluid as fluid
@@ -77,6 +77,7 @@ class HRNet(DeepLabv3p):
         self.class_weight = class_weight
         self.ignore_index = ignore_index
         self.labels = None
+        self.fixed_input_shape = None
 
     def build_net(self, mode='train'):
         model = paddlex.cv.nets.segmentation.HRNet(
@@ -86,18 +87,14 @@ class HRNet(DeepLabv3p):
             use_bce_loss=self.use_bce_loss,
             use_dice_loss=self.use_dice_loss,
             class_weight=self.class_weight,
-            ignore_index=self.ignore_index)
+            ignore_index=self.ignore_index,
+            fixed_input_shape=self.fixed_input_shape)
         inputs = model.generate_inputs()
         model_out = model.build_net(inputs)
         outputs = OrderedDict()
         if mode == 'train':
             self.optimizer.minimize(model_out)
             outputs['loss'] = model_out
-        elif mode == 'eval':
-            outputs['loss'] = model_out[0]
-            outputs['pred'] = model_out[1]
-            outputs['label'] = model_out[2]
-            outputs['mask'] = model_out[3]
         else:
             outputs['pred'] = model_out[0]
             outputs['logit'] = model_out[1]
@@ -150,14 +147,15 @@ class HRNet(DeepLabv3p):
             log_interval_steps (int): 训练日志输出间隔（单位：迭代次数）。默认为2。
             save_dir (str): 模型保存路径。默认'output'。
             pretrain_weights (str): 若指定为路径时，则加载路径下预训练模型；若为字符串'IMAGENET'，
-                则自动下载在IMAGENET图片数据上预训练的模型权重；若为None，则不使用预训练模型。默认为'IMAGENET'。
+                则自动下载在IMAGENET图片数据上预训练的模型权重；若为字符串'CITYSCAPES'
+                则自动下载在CITYSCAPES图片数据上预训练的模型权重；若为None，则不使用预训练模型。默认为'IMAGENET'。
             optimizer (paddle.fluid.optimizer): 优化器。当改参数为None时，使用默认的优化器：使用
                 fluid.optimizer.Momentum优化方法，polynomial的学习率衰减策略。
             learning_rate (float): 默认优化器的初始学习率。默认0.01。
             lr_decay_power (float): 默认优化器学习率多项式衰减系数。默认0.9。
             use_vdl (bool): 是否使用VisualDL进行可视化。默认False。
             sensitivities_file (str): 若指定为路径时，则加载路径下敏感度信息进行裁剪；若为字符串'DEFAULT'，
-                则自动下载在ImageNet图片数据上获得的敏感度信息进行裁剪；若为None，则不进行裁剪。默认为None。
+                则自动下载在Cityscapes图片数据上获得的敏感度信息进行裁剪；若为None，则不进行裁剪。默认为None。
             eval_metric_loss (float): 可容忍的精度损失。默认为0.05。
             early_stop (bool): 是否使用提前终止训练策略。默认值为False。
             early_stop_patience (int): 当使用提前终止训练策略时，如果验证集精度在`early_stop_patience`个epoch内
@@ -170,6 +168,6 @@ class HRNet(DeepLabv3p):
         return super(HRNet, self).train(
             num_epochs, train_dataset, train_batch_size, eval_dataset,
             save_interval_epochs, log_interval_steps, save_dir,
-            pretrain_weights, optimizer, learning_rate, lr_decay_power,
-            use_vdl, sensitivities_file, eval_metric_loss, early_stop,
+            pretrain_weights, optimizer, learning_rate, lr_decay_power, use_vdl,
+            sensitivities_file, eval_metric_loss, early_stop,
             early_stop_patience, resume_checkpoint)

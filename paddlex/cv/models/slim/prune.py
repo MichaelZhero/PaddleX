@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -34,8 +34,12 @@ def sensitivity(program,
                 param_names,
                 eval_func,
                 sensitivities_file=None,
-                pruned_ratios=None):
-    scope = fluid.global_scope()
+                pruned_ratios=None,
+                scope=None):
+    if scope is None:
+        scope = fluid.global_scope()
+    else:
+        scope = scope
     graph = GraphWrapper(program)
     sensitivities = load_sensitivities(sensitivities_file)
 
@@ -100,7 +104,7 @@ def sensitivity(program,
     return sensitivities
 
 
-def channel_prune(program, prune_names, prune_ratios, place, only_graph=False):
+def channel_prune(program, prune_names, prune_ratios, place, only_graph=False, scope=None):
     """通道裁剪。
 
     Args:
@@ -130,7 +134,8 @@ def channel_prune(program, prune_names, prune_ratios, place, only_graph=False):
             pruned_num = int(round(origin_num * (ratio)))
             prune_ratios[index] = ratio
         index += 1
-    scope = fluid.global_scope()
+    if scope is None:
+        scope = fluid.global_scope()
     pruner = Pruner()
     program, _, _ = pruner.prune(
         program,
@@ -171,12 +176,12 @@ def prune_program(model, prune_params_ratios=None):
         prune_params_ratios[prune_name] for prune_name in prune_names
     ]
     model.train_prog = channel_prune(train_prog, prune_names, prune_ratios,
-                                     place)
+                                     place, scope=model.scope)
     model.test_prog = channel_prune(
-        eval_prog, prune_names, prune_ratios, place, only_graph=True)
+        eval_prog, prune_names, prune_ratios, place, only_graph=True, scope=model.scope)
 
 
-def update_program(program, model_dir, place):
+def update_program(program, model_dir, place, scope=None):
     """根据裁剪信息更新Program和参数。
 
     Args:
@@ -193,10 +198,12 @@ def update_program(program, model_dir, place):
         shapes = yaml.load(f.read(), Loader=yaml.Loader)
     for param, shape in shapes.items():
         graph.var(param).set_shape(shape)
+    if scope is None:
+        scope = fluid.global_scope()
     for block in program.blocks:
         for param in block.all_parameters():
             if param.name in shapes:
-                param_tensor = fluid.global_scope().find_var(
+                param_tensor = scope.find_var(
                     param.name).get_tensor()
                 param_tensor.set(
                     np.zeros(list(shapes[param.name])).astype('float32'),
@@ -256,7 +263,8 @@ def cal_params_sensitivities(model, save_file, eval_dataset, batch_size=8):
         prune_names,
         eval_for_prune,
         sensitivities_file=save_file,
-        pruned_ratios=list(np.arange(0.1, 1, 0.1)))
+        pruned_ratios=list(np.arange(0.1, 1, 0.1)),
+        scope=model.scope)
     return sensitivitives
 
 
@@ -283,12 +291,12 @@ def get_params_ratios(sensitivities_file, eval_metric_loss=0.05):
     if not osp.exists(sensitivities_file):
         raise Exception('The sensitivities file is not exists!')
     sensitivitives = paddleslim.prune.load_sensitivities(sensitivities_file)
-    params_ratios = paddleslim.prune.get_ratios_by_loss(
-        sensitivitives, eval_metric_loss)
+    params_ratios = paddleslim.prune.get_ratios_by_loss(sensitivitives,
+                                                        eval_metric_loss)
     return params_ratios
 
 
-def cal_model_size(program, place, sensitivities_file, eval_metric_loss=0.05):
+def cal_model_size(program, place, sensitivities_file, eval_metric_loss=0.05, scope=None):
     """在可容忍的精度损失下，计算裁剪后模型大小相对于当前模型大小的比例。
 
     Args:
@@ -321,7 +329,8 @@ def cal_model_size(program, place, sensitivities_file, eval_metric_loss=0.05):
         list(prune_params_ratios.keys()),
         list(prune_params_ratios.values()),
         place,
-        only_graph=True)
+        only_graph=True,
+        scope=scope)
     origin_size = 0
     new_size = 0
     for var in program.list_vars():

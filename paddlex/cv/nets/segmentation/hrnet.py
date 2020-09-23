@@ -1,5 +1,5 @@
 # coding: utf8
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ import paddlex
 class HRNet(object):
     def __init__(self,
                  num_classes,
+                 input_channel=3,
                  mode='train',
                  width=18,
                  use_bce_loss=False,
@@ -61,6 +62,7 @@ class HRNet(object):
                     format(type(class_weight)))
 
         self.num_classes = num_classes
+        self.input_channel = input_channel
         self.mode = mode
         self.use_bce_loss = use_bce_loss
         self.use_dice_loss = use_dice_loss
@@ -82,7 +84,8 @@ class HRNet(object):
         st4[3] = fluid.layers.resize_bilinear(st4[3], out_shape=shape)
 
         out = fluid.layers.concat(st4, axis=1)
-        last_channels = sum(self.backbone.channels[self.backbone.width][-1])
+        last_channels = sum(self.backbone.channels[str(self.backbone.width)][
+            -1])
 
         out = self._conv_bn_layer(
             input=out,
@@ -135,13 +138,16 @@ class HRNet(object):
 
         if self.fixed_input_shape is not None:
             input_shape = [
-                None, 3, self.fixed_input_shape[1], self.fixed_input_shape[0]
+                None, self.input_channel, self.fixed_input_shape[1],
+                self.fixed_input_shape[0]
             ]
             inputs['image'] = fluid.data(
                 dtype='float32', shape=input_shape, name='image')
         else:
             inputs['image'] = fluid.data(
-                dtype='float32', shape=[None, 3, None, None], name='image')
+                dtype='float32',
+                shape=[None, self.input_channel, None, None],
+                name='image')
         if self.mode == 'train':
             inputs['label'] = fluid.data(
                 dtype='int32', shape=[None, 1, None, None], name='label')

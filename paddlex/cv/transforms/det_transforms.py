@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,10 +41,8 @@ class DetTransform:
 class Compose(DetTransform):
     """根据数据预处理/增强列表对输入数据进行操作。
        所有操作的输入图像流形状均是[H, W, C]，其中H为图像高，W为图像宽，C为图像通道数。
-
     Args:
         transforms (list): 数据预处理/增强列表。
-
     Raises:
         TypeError: 形参数据类型不满足需求。
         ValueError: 数据长度不匹配。
@@ -57,6 +55,7 @@ class Compose(DetTransform):
             raise ValueError('The length of transforms ' + \
                             'must be equal or larger than 1!')
         self.transforms = transforms
+        self.batch_transforms = None
         self.use_mixup = False
         for t in self.transforms:
             if type(t).__name__ == 'MixupImage':
@@ -110,10 +109,11 @@ class Compose(DetTransform):
                 im = im_file
             else:
                 try:
-                    im = cv2.imread(im_file).astype('float32')
+                    im = cv2.imread(im_file)
                 except:
                     raise TypeError('Can\'t read The image file {}!'.format(
                         im_file))
+            im = im.astype('float32')
             im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
             # make default im_info with [h, w, 1]
             im_info['im_resize_info'] = np.array(
@@ -160,7 +160,9 @@ class Compose(DetTransform):
         transform_names = [type(x).__name__ for x in self.transforms]
         for aug in augmenters:
             if type(aug).__name__ in transform_names:
-                logging.error("{} is already in ComposedTransforms, need to remove it from add_augmenters().".format(type(aug).__name__))
+                logging.error(
+                    "{} is already in ComposedTransforms, need to remove it from add_augmenters().".
+                    format(type(aug).__name__))
         self.transforms = augmenters + self.transforms
 
 
@@ -621,6 +623,7 @@ class RandomDistort(DetTransform):
 
             if np.random.uniform(0, 1) < prob:
                 im = ops[id](**params)
+        im = im.astype('float32')
         if label_info is None:
             return (im, im_info)
         else:
@@ -736,7 +739,7 @@ class MixupImage(DetTransform):
             gt_poly2 = im_info['mixup'][2]['gt_poly']
         is_crowd1 = label_info['is_crowd']
         is_crowd2 = im_info['mixup'][2]['is_crowd']
-        
+
         if 0 not in gt_class1 and 0 not in gt_class2:
             gt_bbox = np.concatenate((gt_bbox1, gt_bbox2), axis=0)
             gt_class = np.concatenate((gt_class1, gt_class2), axis=0)
@@ -827,7 +830,7 @@ class RandomExpand(DetTransform):
                 'gt_class' not in label_info:
             raise TypeError('Cannot do RandomExpand! ' + \
                             'Becasuse gt_bbox/gt_class is not in label_info!')
-        if np.random.uniform(0., 1.) < self.prob:
+        if np.random.uniform(0., 1.) > self.prob:
             return (im, im_info, label_info)
 
         if 'gt_class' in label_info and 0 in label_info['gt_class']:
@@ -1281,21 +1284,25 @@ class ComposedRCNNTransforms(Compose):
             min_max_size(list): 图像在缩放时，最小边和最大边的约束条件
             mean(list): 图像均值
             std(list): 图像方差
+            random_horizontal_flip(bool): 是否以0.5的概率使用随机水平翻转增强，该仅在mode为`train`时生效，默认为True
     """
 
     def __init__(self,
                  mode,
                  min_max_size=[800, 1333],
                  mean=[0.485, 0.456, 0.406],
-                 std=[0.229, 0.224, 0.225]):
+                 std=[0.229, 0.224, 0.225],
+                 random_horizontal_flip=True):
         if mode == 'train':
             # 训练时的transforms，包含数据增强
             transforms = [
-                RandomHorizontalFlip(prob=0.5), Normalize(
+                Normalize(
                     mean=mean, std=std), ResizeByShort(
                         short_size=min_max_size[0], max_size=min_max_size[1]),
                 Padding(coarsest_stride=32)
             ]
+            if random_horizontal_flip:
+                transforms.insert(0, RandomHorizontalFlip())
         else:
             # 验证/预测时的transforms
             transforms = [
@@ -1325,9 +1332,14 @@ class ComposedYOLOv3Transforms(Compose):
         Args:
             mode(str): 图像处理流程所处阶段，训练/验证/预测，分别对应'train', 'eval', 'test'
             shape(list): 输入模型中图像的大小，输入模型的图像会被Resize成此大小
-            mixup_epoch(int): 模型训练过程中，前mixup_epoch会使用mixup策略
+            mixup_epoch(int): 模型训练过程中，前mixup_epoch会使用mixup策略, 若设为-1，则表示不使用该策略
             mean(list): 图像均值
             std(list): 图像方差
+            random_distort(bool): 数据增强方式，参数仅在mode为`train`时生效，表示是否在训练过程中随机扰动图像，默认为True
+            random_expand(bool): 数据增强方式，参数仅在mode为`train`时生效，表示是否在训练过程中随机扩张图像，默认为True
+            random_crop(bool): 数据增强方式，参数仅在mode为`train`时生效，表示是否在训练过程中随机裁剪图像，默认为True
+            random_horizontal_flip(bool): 数据增强方式，参数仅在mode为`train`时生效，表示是否在训练过程中随机水平翻转图像，默认为True
+
     """
 
     def __init__(self,
@@ -1335,7 +1347,11 @@ class ComposedYOLOv3Transforms(Compose):
                  shape=[608, 608],
                  mixup_epoch=250,
                  mean=[0.485, 0.456, 0.406],
-                 std=[0.229, 0.224, 0.225]):
+                 std=[0.229, 0.224, 0.225],
+                 random_distort=True,
+                 random_expand=True,
+                 random_crop=True,
+                 random_horizontal_flip=True):
         width = shape
         if isinstance(shape, list):
             if shape[0] != shape[1]:
@@ -1350,12 +1366,18 @@ class ComposedYOLOv3Transforms(Compose):
         if mode == 'train':
             # 训练时的transforms，包含数据增强
             transforms = [
-                MixupImage(mixup_epoch=mixup_epoch), RandomDistort(),
-                RandomExpand(), RandomCrop(), Resize(
-                    target_size=width,
-                    interp='RANDOM'), RandomHorizontalFlip(), Normalize(
+                MixupImage(mixup_epoch=mixup_epoch), Resize(
+                    target_size=width, interp='RANDOM'), Normalize(
                         mean=mean, std=std)
             ]
+            if random_horizontal_flip:
+                transforms.insert(1, RandomHorizontalFlip())
+            if random_crop:
+                transforms.insert(1, RandomCrop())
+            if random_expand:
+                transforms.insert(1, RandomExpand())
+            if random_distort:
+                transforms.insert(1, RandomDistort())
         else:
             # 验证/预测时的transforms
             transforms = [
@@ -1364,3 +1386,187 @@ class ComposedYOLOv3Transforms(Compose):
                         mean=mean, std=std)
             ]
         super(ComposedYOLOv3Transforms, self).__init__(transforms)
+
+
+class BatchRandomShape(DetTransform):
+    """调整图像大小（resize）。
+
+    对batch数据中的每张图像全部resize到random_shapes中任意一个大小。
+    注意：当插值方式为“RANDOM”时，则随机选取一种插值方式进行resize。
+
+    Args:
+        random_shapes (list): resize大小选择列表。
+            默认为[320, 352, 384, 416, 448, 480, 512, 544, 576, 608]。
+        interp (str): resize的插值方式，与opencv的插值方式对应，取值范围为
+            ['NEAREST', 'LINEAR', 'CUBIC', 'AREA', 'LANCZOS4', 'RANDOM']。默认为"RANDOM"。
+    Raises:
+        ValueError: 插值方式不在['NEAREST', 'LINEAR', 'CUBIC',
+                    'AREA', 'LANCZOS4', 'RANDOM']中。
+    """
+
+    # The interpolation mode
+    interp_dict = {
+        'NEAREST': cv2.INTER_NEAREST,
+        'LINEAR': cv2.INTER_LINEAR,
+        'CUBIC': cv2.INTER_CUBIC,
+        'AREA': cv2.INTER_AREA,
+        'LANCZOS4': cv2.INTER_LANCZOS4
+    }
+
+    def __init__(
+            self,
+            random_shapes=[320, 352, 384, 416, 448, 480, 512, 544, 576, 608],
+            interp='RANDOM'):
+        if not (interp == "RANDOM" or interp in self.interp_dict):
+            raise ValueError("interp should be one of {}".format(
+                self.interp_dict.keys()))
+        self.random_shapes = random_shapes
+        self.interp = interp
+
+    def __call__(self, batch_data):
+        """
+        Args:
+            batch_data (list): 由与图像相关的各种信息组成的batch数据。
+        Returns:
+            list: 由与图像相关的各种信息组成的batch数据。
+        """
+        shape = np.random.choice(self.random_shapes)
+
+        if self.interp == "RANDOM":
+            interp = random.choice(list(self.interp_dict.keys()))
+        else:
+            interp = self.interp
+        for data_id, data in enumerate(batch_data):
+            data_list = list(data)
+            im = data_list[0]
+            im = np.swapaxes(im, 1, 0)
+            im = np.swapaxes(im, 1, 2)
+            im = resize(im, shape, self.interp_dict[interp])
+            im = np.swapaxes(im, 1, 2)
+            im = np.swapaxes(im, 1, 0)
+            data_list[0] = im
+            batch_data[data_id] = tuple(data_list)
+        return batch_data
+
+
+class GenerateYoloTarget(object):
+    """生成YOLOv3的ground truth（真实标注框）在不同特征层的位置转换信息。
+       该transform只在YOLOv3计算细粒度loss时使用。
+
+       Args:
+           anchors (list|tuple): anchor框的宽度和高度。
+           anchor_masks (list|tuple): 在计算损失时，使用anchor的mask索引。
+           num_classes (int): 类别数。默认为80。
+           iou_thresh (float): iou阈值，当anchor和真实标注框的iou大于该阈值时，计入target。默认为1.0。
+    """
+
+    def __init__(self,
+                 anchors,
+                 anchor_masks,
+                 downsample_ratios,
+                 num_classes=80,
+                 iou_thresh=1.):
+        super(GenerateYoloTarget, self).__init__()
+        self.anchors = anchors
+        self.anchor_masks = anchor_masks
+        self.downsample_ratios = downsample_ratios
+        self.num_classes = num_classes
+        self.iou_thresh = iou_thresh
+
+    def __call__(self, batch_data):
+        """
+        Args:
+            batch_data (list): 由与图像相关的各种信息组成的batch数据。
+        Returns:
+            list: 由与图像相关的各种信息组成的batch数据。
+                  其中，每个数据新添加的字段为：
+                           - target0 (np.ndarray): YOLOv3的ground truth在特征层0的位置转换信息，
+                                   形状为(特征层0的anchor数量, 6+类别数, 特征层0的h, 特征层0的w)。
+                           - target1 (np.ndarray): YOLOv3的ground truth在特征层1的位置转换信息，
+                                   形状为(特征层1的anchor数量, 6+类别数, 特征层1的h, 特征层1的w)。
+                           - ...
+                           -targetn (np.ndarray): YOLOv3的ground truth在特征层n的位置转换信息，
+                                   形状为(特征层n的anchor数量, 6+类别数, 特征层n的h, 特征层n的w)。
+                    n的是大小由anchor_masks的长度决定。
+        """
+        im = batch_data[0][0]
+        h = im.shape[1]
+        w = im.shape[2]
+        an_hw = np.array(self.anchors) / np.array([[w, h]])
+        for data_id, data in enumerate(batch_data):
+            gt_bbox = data[1]
+            gt_class = data[2]
+            gt_score = data[3]
+            im_shape = data[4]
+            origin_h = float(im_shape[0])
+            origin_w = float(im_shape[1])
+            data_list = list(data)
+            for i, (
+                    mask, downsample_ratio
+            ) in enumerate(zip(self.anchor_masks, self.downsample_ratios)):
+                grid_h = int(h / downsample_ratio)
+                grid_w = int(w / downsample_ratio)
+                target = np.zeros(
+                    (len(mask), 6 + self.num_classes, grid_h, grid_w),
+                    dtype=np.float32)
+                for b in range(gt_bbox.shape[0]):
+                    gx = gt_bbox[b, 0] / float(origin_w)
+                    gy = gt_bbox[b, 1] / float(origin_h)
+                    gw = gt_bbox[b, 2] / float(origin_w)
+                    gh = gt_bbox[b, 3] / float(origin_h)
+                    cls = gt_class[b]
+                    score = gt_score[b]
+                    if gw <= 0. or gh <= 0. or score <= 0.:
+                        continue
+                    # find best match anchor index
+                    best_iou = 0.
+                    best_idx = -1
+                    for an_idx in range(an_hw.shape[0]):
+                        iou = jaccard_overlap(
+                            [0., 0., gw, gh],
+                            [0., 0., an_hw[an_idx, 0], an_hw[an_idx, 1]])
+                        if iou > best_iou:
+                            best_iou = iou
+                            best_idx = an_idx
+                    gi = int(gx * grid_w)
+                    gj = int(gy * grid_h)
+                    # gtbox should be regresed in this layes if best match
+                    # anchor index in anchor mask of this layer
+                    if best_idx in mask:
+                        best_n = mask.index(best_idx)
+                        # x, y, w, h, scale
+                        target[best_n, 0, gj, gi] = gx * grid_w - gi
+                        target[best_n, 1, gj, gi] = gy * grid_h - gj
+                        target[best_n, 2, gj, gi] = np.log(
+                            gw * w / self.anchors[best_idx][0])
+                        target[best_n, 3, gj, gi] = np.log(
+                            gh * h / self.anchors[best_idx][1])
+                        target[best_n, 4, gj, gi] = 2.0 - gw * gh
+                        # objectness record gt_score
+                        target[best_n, 5, gj, gi] = score
+                        # classification
+                        target[best_n, 6 + cls, gj, gi] = 1.
+                    # For non-matched anchors, calculate the target if the iou
+                    # between anchor and gt is larger than iou_thresh
+                    if self.iou_thresh < 1:
+                        for idx, mask_i in enumerate(mask):
+                            if mask_i == best_idx: continue
+                            iou = jaccard_overlap(
+                                [0., 0., gw, gh],
+                                [0., 0., an_hw[mask_i, 0], an_hw[mask_i, 1]])
+                            if iou > self.iou_thresh:
+                                # x, y, w, h, scale
+                                target[idx, 0, gj, gi] = gx * grid_w - gi
+                                target[idx, 1, gj, gi] = gy * grid_h - gj
+                                target[idx, 2, gj, gi] = np.log(
+                                    gw * w / self.anchors[mask_i][0])
+                                target[idx, 3, gj, gi] = np.log(
+                                    gh * h / self.anchors[mask_i][1])
+                                target[idx, 4, gj, gi] = 2.0 - gw * gh
+                                # objectness record gt_score
+                                target[idx, 5, gj, gi] = score
+                                # classification
+                                target[idx, 6 + cls, gj, gi] = 1.
+                data_list.append(target)
+            batch_data[data_id] = tuple(data_list)
+        return batch_data

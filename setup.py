@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,11 +15,11 @@
 import setuptools
 import sys
 
-long_description = "PaddleX. A end-to-end deeplearning model development toolkit base on PaddlePaddle\n\n"
+long_description = "PaddlePaddle Entire Process Development Toolkit"
 
 setuptools.setup(
     name="paddlex",
-    version='1.0.6',
+    version='1.2.1',
     author="paddlex",
     author_email="paddlex@baidu.com",
     description=long_description,
@@ -30,7 +30,8 @@ setuptools.setup(
     setup_requires=['cython', 'numpy'],
     install_requires=[
         "pycocotools;platform_system!='Windows'", 'pyyaml', 'colorama', 'tqdm',
-        'paddleslim==1.0.1', 'visualdl>=2.0.0b', 'paddlehub>=1.6.2'
+        'paddleslim==1.1.1', 'visualdl>=2.0.0', 'paddlehub>=1.8.2',
+        'shapely>=1.7.0', "opencv-python"
     ],
     classifiers=[
         "Programming Language :: Python :: 3",

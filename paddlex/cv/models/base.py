@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,9 +23,11 @@ import yaml
 import copy
 import json
 import functools
+import multiprocessing as mp
 import paddlex.utils.logging as logging
 from paddlex.utils import seconds_to_hms
 from paddlex.utils.utils import EarlyStop
+from paddlex.cv.transforms import arrange_transforms
 import paddlex
 from collections import OrderedDict
 from os import path as osp
@@ -73,6 +75,17 @@ class BaseAPI:
         self.status = 'Normal'
         # 已完成迭代轮数，为恢复训练时的起始轮数
         self.completed_epochs = 0
+        self.scope = fluid.global_scope()
+
+        # 线程池，在模型在预测时用于对输入数据以图片为单位进行并行处理
+        # 主要用于batch_predict接口
+        thread_num = mp.cpu_count() if mp.cpu_count() < 8 else 8
+        self.thread_pool = mp.pool.ThreadPool(thread_num)
+
+    def reset_thread_pool(self, thread_num):
+        self.thread_pool.close()
+        self.thread_pool.join()
+        self.thread_pool = mp.pool.ThreadPool(thread_num)
 
     def _get_single_card_bs(self, batch_size):
         if batch_size % len(self.places) == 0:
@@ -84,6 +97,10 @@ class BaseAPI:
                                 'place']))
 
     def build_program(self):
+        if hasattr(paddlex, 'model_built') and paddlex.model_built:
+            logging.error(
+                "Function model.train() only can be called once in your code.")
+        paddlex.model_built = True
         # 构建训练网络
         self.train_inputs, self.train_outputs = self.build_net(mode='train')
         self.train_prog = fluid.default_main_program()
@@ -96,23 +113,6 @@ class BaseAPI:
                 self.test_inputs, self.test_outputs = self.build_net(
                     mode='test')
         self.test_prog = self.test_prog.clone(for_test=True)
-
-    def arrange_transforms(self, transforms, mode='train'):
-        # 给transforms添加arrange操作
-        if self.model_type == 'classifier':
-            arrange_transform = paddlex.cls.transforms.ArrangeClassifier
-        elif self.model_type == 'segmenter':
-            arrange_transform = paddlex.seg.transforms.ArrangeSegmenter
-        elif self.model_type == 'detector':
-            arrange_name = 'Arrange{}'.format(self.__class__.__name__)
-            arrange_transform = getattr(paddlex.det.transforms, arrange_name)
-        else:
-            raise Exception("Unrecognized model type: {}".format(
-                self.model_type))
-        if type(transforms.transforms[-1]).__name__.startswith('Arrange'):
-            transforms.transforms[-1] = arrange_transform(mode=mode)
-        else:
-            transforms.transforms.append(arrange_transform(mode=mode))
 
     def build_train_data_loader(self, dataset, batch_size):
         # 初始化data_loader
@@ -135,7 +135,11 @@ class BaseAPI:
                            batch_size=1,
                            batch_num=10,
                            cache_dir="./temp"):
-        self.arrange_transforms(transforms=dataset.transforms, mode='quant')
+        arrange_transforms(
+            model_type=self.model_type,
+            class_name=self.__class__.__name__,
+            transforms=dataset.transforms,
+            mode='quant')
         dataset.num_samples = batch_size * batch_num
         try:
             from .slim.post_quantization import PaddleXPostTrainingQuantization
@@ -155,7 +159,7 @@ class BaseAPI:
             outputs=self.test_outputs,
             batch_size=batch_size,
             batch_nums=batch_num,
-            scope=None,
+            scope=self.scope,
             algo='KL',
             quantizable_op_type=["conv2d", "depthwise_conv2d", "mul"],
             is_full_quantize=False,
@@ -199,22 +203,31 @@ class BaseAPI:
                 if self.model_type == 'classifier':
                     if pretrain_weights not in ['IMAGENET']:
                         logging.warning(
-                            "Pretrain_weights for classifier should be defined as directory path or parameter file or 'IMAGENET' or None, but it is {}, so we force to set it as 'IMAGENET'".
+                            "Path of pretrain_weights('{}') is not exists!".
                             format(pretrain_weights))
+                        logging.warning(
+                            "Pretrain_weights will be forced to set as 'IMAGENET', if you don't want to use pretrain weights, set pretrain_weights=None."
+                        )
                         pretrain_weights = 'IMAGENET'
                 elif self.model_type == 'detector':
                     if pretrain_weights not in ['IMAGENET', 'COCO']:
                         logging.warning(
-                            "Pretrain_weights for detector should be defined as directory path or parameter file or 'IMAGENET' or 'COCO' or None, but it is {}, so we force to set it as 'IMAGENET'".
+                            "Path of pretrain_weights('{}') is not exists!".
                             format(pretrain_weights))
+                        logging.warning(
+                            "Pretrain_weights will be forced to set as 'IMAGENET', if you don't want to use pretrain weights, set pretrain_weights=None."
+                        )
                         pretrain_weights = 'IMAGENET'
                 elif self.model_type == 'segmenter':
                     if pretrain_weights not in [
                             'IMAGENET', 'COCO', 'CITYSCAPES'
                     ]:
                         logging.warning(
-                            "Pretrain_weights for segmenter should be defined as directory path or parameter file or 'IMAGENET' or 'COCO' or 'CITYSCAPES', but it is {}, so we force to set it as 'IMAGENET'".
+                            "Path of pretrain_weights('{}') is not exists!".
                             format(pretrain_weights))
+                        logging.warning(
+                            "Pretrain_weights will be forced to set as 'IMAGENET', if you don't want to use pretrain weights, set pretrain_weights=None."
+                        )
                         pretrain_weights = 'IMAGENET'
             if hasattr(self, 'backbone'):
                 backbone = self.backbone
@@ -353,16 +366,7 @@ class BaseAPI:
             var.name for var in list(self.test_inputs.values())
         ]
         test_outputs = list(self.test_outputs.values())
-        if self.__class__.__name__ == 'MaskRCNN':
-            from paddlex.utils.save import save_mask_inference_model
-            save_mask_inference_model(
-                dirname=save_dir,
-                executor=self.exe,
-                params_filename='__params__',
-                feeded_var_names=test_input_names,
-                target_vars=test_outputs,
-                main_program=self.test_prog)
-        else:
+        with fluid.scope_guard(self.scope):
             fluid.io.save_inference_model(
                 dirname=save_dir,
                 executor=self.exe,
@@ -413,8 +417,11 @@ class BaseAPI:
             from visualdl import LogWriter
             vdl_logdir = osp.join(save_dir, 'vdl_log')
         # 给transform添加arrange操作
-        self.arrange_transforms(
-            transforms=train_dataset.transforms, mode='train')
+        arrange_transforms(
+            model_type=self.model_type,
+            class_name=self.__class__.__name__,
+            transforms=train_dataset.transforms,
+            mode='train')
         # 构建train_data_loader
         self.build_train_data_loader(
             dataset=train_dataset, batch_size=train_batch_size)
@@ -542,6 +549,8 @@ class BaseAPI:
                 current_save_dir = osp.join(save_dir, "epoch_{}".format(i + 1))
                 if not osp.isdir(current_save_dir):
                     os.makedirs(current_save_dir)
+                if getattr(self, 'use_ema', False):
+                    self.exe.run(self.ema.apply_program)
                 if eval_dataset is not None and eval_dataset.num_samples > 0:
                     self.eval_metrics, self.eval_details = self.evaluate(
                         eval_dataset=eval_dataset,
@@ -568,6 +577,8 @@ class BaseAPI:
                             log_writer.add_scalar(
                                 "Metrics/Eval(Epoch): {}".format(k), v, i + 1)
                 self.save_model(save_dir=current_save_dir)
+                if getattr(self, 'use_ema', False):
+                    self.exe.run(self.ema.restore_program)
                 time_eval_one_epoch = time.time() - eval_epoch_start_time
                 eval_epoch_start_time = time.time()
                 if best_model_epoch > 0:

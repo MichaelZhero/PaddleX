@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,13 +42,12 @@ def visualize(model, sensitivities_file, save_dir='./'):
     y = list()
     for loss_thresh in tqdm.tqdm(list(np.arange(0.05, 1, 0.05))):
         prune_ratio = 1 - cal_model_size(
-            program, place, sensitivities_file, eval_metric_loss=loss_thresh)
+            program, place, sensitivities_file, eval_metric_loss=loss_thresh, scope=model.scope)
         x.append(prune_ratio)
         y.append(loss_thresh)
     plt.plot(x, y, color='green', linewidth=0.5, marker='o', markersize=3)
     my_x_ticks = np.arange(
-        min(np.array(x)) - 0.01,
-        max(np.array(x)) + 0.01, 0.05)
+        min(np.array(x)) - 0.01, max(np.array(x)) + 0.01, 0.05)
     my_y_ticks = np.arange(0.05, 1, 0.05)
     plt.xticks(my_x_ticks, rotation=15, fontsize=8)
     plt.yticks(my_y_ticks, fontsize=8)

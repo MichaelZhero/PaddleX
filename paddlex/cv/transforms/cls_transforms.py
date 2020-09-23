@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,10 +32,8 @@ class ClsTransform:
 class Compose(ClsTransform):
     """根据数据预处理/增强算子对输入数据进行操作。
        所有操作的输入图像流形状均是[H, W, C]，其中H为图像高，W为图像宽，C为图像通道数。
-
     Args:
         transforms (list): 数据预处理/增强算子。
-
     Raises:
         TypeError: 形参数据类型不满足需求。
         ValueError: 数据长度不匹配。
@@ -48,7 +46,7 @@ class Compose(ClsTransform):
             raise ValueError('The length of transforms ' + \
                             'must be equal or larger than 1!')
         self.transforms = transforms
-
+        self.batch_transforms = None
         # 检查transforms里面的操作，目前支持PaddleX定义的或者是imgaug操作
         for op in self.transforms:
             if not isinstance(op, ClsTransform):
@@ -74,9 +72,10 @@ class Compose(ClsTransform):
                     format(len(im.shape)))
         else:
             try:
-                im = cv2.imread(im).astype('float32')
+                im = cv2.imread(im)
             except:
                 raise TypeError('Can\'t read The image file {}!'.format(im))
+        im = im.astype('float32')
         im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
         for op in self.transforms:
             if isinstance(op, ClsTransform):
@@ -100,7 +99,9 @@ class Compose(ClsTransform):
         transform_names = [type(x).__name__ for x in self.transforms]
         for aug in augmenters:
             if type(aug).__name__ in transform_names:
-                logging.error("{} is already in ComposedTransforms, need to remove it from add_augmenters().".format(type(aug).__name__))
+                logging.error(
+                    "{} is already in ComposedTransforms, need to remove it from add_augmenters().".
+                    format(type(aug).__name__))
         self.transforms = augmenters + self.transforms
 
 
@@ -434,6 +435,7 @@ class RandomDistort(ClsTransform):
             params['im'] = im
             if np.random.uniform(0, 1) < prob:
                 im = ops[id](**params)
+        im = im.astype('float32')
         if label is None:
             return (im, )
         else:
@@ -490,13 +492,15 @@ class ComposedClsTransforms(Compose):
             crop_size(int|list): 输入模型里的图像大小
             mean(list): 图像均值
             std(list): 图像方差
+            random_horizontal_flip(bool): 是否以0.5的概率使用随机水平翻转增强，该仅在mode为`train`时生效，默认为True
     """
 
     def __init__(self,
                  mode,
                  crop_size=[224, 224],
                  mean=[0.485, 0.456, 0.406],
-                 std=[0.229, 0.224, 0.225]):
+                 std=[0.229, 0.224, 0.225],
+                 random_horizontal_flip=True):
         width = crop_size
         if isinstance(crop_size, list):
             if crop_size[0] != crop_size[1]:
@@ -512,10 +516,11 @@ class ComposedClsTransforms(Compose):
         if mode == 'train':
             # 训练时的transforms，包含数据增强
             transforms = [
-                RandomCrop(crop_size=width), RandomHorizontalFlip(prob=0.5),
-                Normalize(
+                RandomCrop(crop_size=width), Normalize(
                     mean=mean, std=std)
             ]
+            if random_horizontal_flip:
+                transforms.insert(0, RandomHorizontalFlip())
         else:
             # 验证/预测时的transforms
             transforms = [

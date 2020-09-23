@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import numpy as np
 from collections import OrderedDict
 import xml.etree.ElementTree as ET
 import paddlex.utils.logging as logging
+from paddlex.utils import path_normalization
 from .dataset import Dataset
 from .dataset import is_pic
 from .dataset import get_encoding
@@ -90,8 +91,14 @@ class VOCDetection(Dataset):
                 line = fr.readline()
                 if not line:
                     break
+                if len(line.strip().split()) > 2:
+                    raise Exception(
+                        "A space is defined as the separator, but it exists in image or label name {}."
+                        .format(line))
                 img_file, xml_file = [osp.join(data_dir, x) \
                         for x in line.strip().split()[:2]]
+                img_file = path_normalization(img_file)
+                xml_file = path_normalization(xml_file)
                 if not is_pic(img_file):
                     continue
                 if not osp.isfile(xml_file):
@@ -106,16 +113,23 @@ class VOCDetection(Dataset):
                     ct = int(tree.find('id').text)
                     im_id = np.array([int(tree.find('id').text)])
                 pattern = re.compile('<object>', re.IGNORECASE)
-                obj_tag = pattern.findall(str(ET.tostringlist(tree.getroot())))[0][1:-1]
+                obj_match = pattern.findall(
+                    str(ET.tostringlist(tree.getroot())))
+                if len(obj_match) == 0:
+                    continue
+                obj_tag = obj_match[0][1:-1]
                 objs = tree.findall(obj_tag)
                 pattern = re.compile('<size>', re.IGNORECASE)
-                size_tag = pattern.findall(str(ET.tostringlist(tree.getroot())))[0][1:-1]
+                size_tag = pattern.findall(
+                    str(ET.tostringlist(tree.getroot())))[0][1:-1]
                 size_element = tree.find(size_tag)
                 pattern = re.compile('<width>', re.IGNORECASE)
-                width_tag = pattern.findall(str(ET.tostringlist(size_element)))[0][1:-1]
+                width_tag = pattern.findall(
+                    str(ET.tostringlist(size_element)))[0][1:-1]
                 im_w = float(size_element.find(width_tag).text)
                 pattern = re.compile('<height>', re.IGNORECASE)
-                height_tag = pattern.findall(str(ET.tostringlist(size_element)))[0][1:-1]
+                height_tag = pattern.findall(
+                    str(ET.tostringlist(size_element)))[0][1:-1]
                 im_h = float(size_element.find(height_tag).text)
                 gt_bbox = np.zeros((len(objs), 4), dtype=np.float32)
                 gt_class = np.zeros((len(objs), 1), dtype=np.int32)
@@ -124,29 +138,36 @@ class VOCDetection(Dataset):
                 difficult = np.zeros((len(objs), 1), dtype=np.int32)
                 for i, obj in enumerate(objs):
                     pattern = re.compile('<name>', re.IGNORECASE)
-                    name_tag = pattern.findall(str(ET.tostringlist(obj)))[0][1:-1]
+                    name_tag = pattern.findall(str(ET.tostringlist(obj)))[0][
+                        1:-1]
                     cname = obj.find(name_tag).text.strip()
                     gt_class[i][0] = cname2cid[cname]
                     pattern = re.compile('<difficult>', re.IGNORECASE)
-                    diff_tag = pattern.findall(str(ET.tostringlist(obj)))[0][1:-1]
+                    diff_tag = pattern.findall(str(ET.tostringlist(obj)))[0][
+                        1:-1]
                     try:
                         _difficult = int(obj.find(diff_tag).text)
                     except Exception:
                         _difficult = 0
                     pattern = re.compile('<bndbox>', re.IGNORECASE)
-                    box_tag = pattern.findall(str(ET.tostringlist(obj)))[0][1:-1]
+                    box_tag = pattern.findall(str(ET.tostringlist(obj)))[0][1:
+                                                                            -1]
                     box_element = obj.find(box_tag)
                     pattern = re.compile('<xmin>', re.IGNORECASE)
-                    xmin_tag = pattern.findall(str(ET.tostringlist(box_element)))[0][1:-1]
+                    xmin_tag = pattern.findall(
+                        str(ET.tostringlist(box_element)))[0][1:-1]
                     x1 = float(box_element.find(xmin_tag).text)
                     pattern = re.compile('<ymin>', re.IGNORECASE)
-                    ymin_tag = pattern.findall(str(ET.tostringlist(box_element)))[0][1:-1]
+                    ymin_tag = pattern.findall(
+                        str(ET.tostringlist(box_element)))[0][1:-1]
                     y1 = float(box_element.find(ymin_tag).text)
                     pattern = re.compile('<xmax>', re.IGNORECASE)
-                    xmax_tag = pattern.findall(str(ET.tostringlist(box_element)))[0][1:-1]
+                    xmax_tag = pattern.findall(
+                        str(ET.tostringlist(box_element)))[0][1:-1]
                     x2 = float(box_element.find(xmax_tag).text)
                     pattern = re.compile('<ymax>', re.IGNORECASE)
-                    ymax_tag = pattern.findall(str(ET.tostringlist(box_element)))[0][1:-1]
+                    ymax_tag = pattern.findall(
+                        str(ET.tostringlist(box_element)))[0][1:-1]
                     y2 = float(box_element.find(ymax_tag).text)
                     x1 = max(0, x1)
                     y1 = max(0, y1)
@@ -176,6 +197,7 @@ class VOCDetection(Dataset):
                     'gt_class': gt_class,
                     'gt_bbox': gt_bbox,
                     'gt_score': gt_score,
+                    'gt_poly': [],
                     'difficult': difficult
                 }
                 voc_rec = (im_info, label_info)

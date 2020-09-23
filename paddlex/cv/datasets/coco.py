@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
 from __future__ import absolute_import
 import copy
 import os.path as osp
+import six
+import sys
 import random
 import numpy as np
 import paddlex.utils.logging as logging
@@ -47,6 +49,12 @@ class CocoDetection(VOCDetection):
                  parallel_method='process',
                  shuffle=False):
         from pycocotools.coco import COCO
+
+        try:
+            import shapely.ops
+            from shapely.geometry import Polygon, MultiPolygon, GeometryCollection
+        except:
+            six.reraise(*sys.exc_info())
 
         super(VOCDetection, self).__init__(
             transforms=transforms,
@@ -100,7 +108,7 @@ class CocoDetection(VOCDetection):
             gt_score = np.ones((num_bbox, 1), dtype=np.float32)
             is_crowd = np.zeros((num_bbox, 1), dtype=np.int32)
             difficult = np.zeros((num_bbox, 1), dtype=np.int32)
-            gt_poly = None
+            gt_poly = [None] * num_bbox
 
             for i, box in enumerate(bboxes):
                 catid = box['category_id']
@@ -108,8 +116,6 @@ class CocoDetection(VOCDetection):
                 gt_bbox[i, :] = box['clean_bbox']
                 is_crowd[i][0] = box['iscrowd']
                 if 'segmentation' in box:
-                    if gt_poly is None:
-                        gt_poly = [None] * num_bbox
                     gt_poly[i] = box['segmentation']
 
             im_info = {
@@ -121,10 +127,9 @@ class CocoDetection(VOCDetection):
                 'gt_class': gt_class,
                 'gt_bbox': gt_bbox,
                 'gt_score': gt_score,
+                'gt_poly': gt_poly,
                 'difficult': difficult
             }
-            if gt_poly is not None:
-                label_info['gt_poly'] = gt_poly
 
             coco_rec = (im_info, label_info)
             self.file_list.append([im_fname, coco_rec])

@@ -1,4 +1,4 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from __future__ import absolute_import
+
 import os
 if 'FLAGS_eager_delete_tensor_gb' not in os.environ:
     os.environ['FLAGS_eager_delete_tensor_gb'] = '0.0'
@@ -21,6 +22,7 @@ if 'FLAGS_allocator_strategy' not in os.environ:
 if "CUDA_VISIBLE_DEVICES" in os.environ:
     if os.environ["CUDA_VISIBLE_DEVICES"].count("-1") > 0:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 from .utils.utils import get_environ_info
 from . import cv
 from . import det
@@ -38,19 +40,20 @@ except:
         "[WARNING] pycocotools is not installed, detection model is not available now."
     )
     print(
-        "[WARNING] pycocotools install: https://github.com/PaddlePaddle/PaddleX/blob/develop/docs/install.md"
+        "[WARNING] pycocotools install: https://paddlex.readthedocs.io/zh_CN/develop/install.html#pycocotools"
     )
 
 import paddlehub as hub
-if hub.version.hub_version < '1.6.2':
-    raise Exception("[ERROR] paddlehub >= 1.6.2 is required")
+if hub.version.hub_version < '1.8.2':
+    raise Exception("[ERROR] paddlehub >= 1.8.2 is required")
 
 env_info = get_environ_info()
 load_model = cv.models.load_model
 datasets = cv.datasets
+transforms = cv.transforms
 
 log_level = 2
 
 from . import interpret
 
-__version__ = '1.0.6'
+__version__ = '1.2.1'

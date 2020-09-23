@@ -1,11 +1,11 @@
-# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserve.
-# 
+# copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,6 +22,7 @@ from .interpretation_predict import interpretation_predict
 from .core.interpretation import Interpretation
 from .core.normlime_base import precompute_global_classifier
 from .core._session_preparation import gen_user_home
+from paddlex.cv.transforms import arrange_transforms
 
 
 def lime(img_file, model, num_samples=3000, batch_size=50, save_dir='./'):
@@ -48,7 +49,11 @@ def lime(img_file, model, num_samples=3000, batch_size=50, save_dir='./'):
             'The interpretation only can deal with the Normal model')
     if not osp.exists(save_dir):
         os.makedirs(save_dir)
-    model.arrange_transforms(transforms=model.test_transforms, mode='test')
+    arrange_transforms(
+        model.model_type,
+        model.__class__.__name__,
+        transforms=model.test_transforms,
+        mode='test')
     tmp_transforms = copy.deepcopy(model.test_transforms)
     tmp_transforms.transforms = tmp_transforms.transforms[:-2]
     img = tmp_transforms(img_file)[0]
@@ -70,8 +75,10 @@ def normlime(img_file,
              normlime_weights_file=None):
     """使用NormLIME算法将模型预测结果的可解释性可视化。
 
-    NormLIME是利用一定数量的样本来出一个全局的解释。NormLIME会提前计算一定数量的测
-    试样本的LIME结果，然后对相同的特征进行权重的归一化，这样来得到一个全局的输入和输出的关系。
+    NormLIME是利用一定数量的样本来出一个全局的解释。由于NormLIME计算量较大，此处采用一种简化的方式：
+    使用一定数量的测试样本（目前默认使用所有测试样本），对每个样本进行特征提取，映射到同一个特征空间；
+    然后以此特征做为输入，以模型输出做为输出，使用线性回归对其进行拟合，得到一个全局的输入和输出的关系。
+    之后，对一测试样本进行解释时，使用NormLIME全局的解释，来对LIME的结果进行滤波，使最终的可视化结果更加稳定。
 
     注意1：dataset读取的是一个数据集，该数据集不宜过大，否则计算时间会较长，但应包含所有类别的数据。
     注意2：NormLIME可解释性结果可视化目前只支持分类模型。
@@ -92,7 +99,11 @@ def normlime(img_file,
             'The interpretation only can deal with the Normal model')
     if not osp.exists(save_dir):
         os.makedirs(save_dir)
-    model.arrange_transforms(transforms=model.test_transforms, mode='test')
+    arrange_transforms(
+        model.model_type,
+        model.__class__.__name__,
+        transforms=model.test_transforms,
+        mode='test')
     tmp_transforms = copy.deepcopy(model.test_transforms)
     tmp_transforms.transforms = tmp_transforms.transforms[:-2]
     img = tmp_transforms(img_file)[0]

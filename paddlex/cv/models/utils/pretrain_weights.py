@@ -1,6 +1,5 @@
 import paddlex
 import paddlex.utils.logging as logging
-import paddlehub as hub
 import os
 import os.path as osp
 
@@ -118,7 +117,7 @@ coco_pretrain = {
     'DeepLabv3p_Xception65_COCO':
     'https://paddleseg.bj.bcebos.com/models/xception65_coco.tgz',
     'PPYOLO_ResNet50_vd_ssld_COCO':
-    'https://paddlemodels.bj.bcebos.com/object_detection/ppyolo_2x.pdparams'
+    'https://bj.bcebos.com/paddlex/models/ppyolo_resnet50_vd_ssld.tar'
 }
 
 cityscapes_pretrain = {
@@ -156,8 +155,7 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
             logging.warning(warning_info.format(class_name, flag, 'IMAGENET'))
             flag = 'IMAGENET'
         elif class_name == 'FastSCNN':
-            logging.warning(
-                warning_info.format(class_name, flag, 'CITYSCAPES'))
+            logging.warning(warning_info.format(class_name, flag, 'CITYSCAPES'))
             flag = 'CITYSCAPES'
     elif flag == 'CITYSCAPES':
         model_name = '{}_{}'.format(class_name, backbone)
@@ -180,8 +178,7 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
             logging.warning(warning_info.format(class_name, flag, 'COCO'))
             flag = 'COCO'
         elif class_name == 'FastSCNN':
-            logging.warning(
-                warning_info.format(class_name, flag, 'CITYSCAPES'))
+            logging.warning(warning_info.format(class_name, flag, 'CITYSCAPES'))
             flag = 'CITYSCAPES'
 
     if flag == 'IMAGENET':
@@ -202,11 +199,13 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
         assert backbone in image_pretrain, "There is not ImageNet pretrain weights for {}, you may try COCO.".format(
             backbone)
 
-        #        if backbone == 'AlexNet':
-        #            url = image_pretrain[backbone]
-        #            fname = osp.split(url)[-1].split('.')[0]
-        #            paddlex.utils.download_and_decompress(url, path=new_save_dir)
-        #            return osp.join(new_save_dir, fname)
+        if getattr(paddlex, 'gui_mode', False):
+            url = image_pretrain[backbone]
+            fname = osp.split(url)[-1].split('.')[0]
+            paddlex.utils.download_and_decompress(url, path=new_save_dir)
+            return osp.join(new_save_dir, fname)
+
+        import paddlehub as hub
         try:
             logging.info(
                 "Connecting PaddleHub server to get pretrain weights...")
@@ -241,8 +240,12 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
         elif flag == 'CITYSCAPES':
             url = cityscapes_pretrain[backbone]
         fname = osp.split(url)[-1].split('.')[0]
-        #        paddlex.utils.download_and_decompress(url, path=new_save_dir)
-        #        return osp.join(new_save_dir, fname)
+
+        if getattr(paddlex, 'gui_mode', False):
+            paddlex.utils.download_and_decompress(url, path=new_save_dir)
+            return osp.join(new_save_dir, fname)
+
+        import paddlehub as hub
         try:
             logging.info(
                 "Connecting PaddleHub server to get pretrain weights...")

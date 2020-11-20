@@ -98,9 +98,11 @@ class Compose(SegTransform):
                     format(len(im.shape)))
         else:
             try:
-                im = Compose.read_img(im)
+                im_path = im
+                im = Compose.read_img(im).astype('float32')
             except:
-                raise ValueError('Can\'t read The image file {}!'.format(im))
+                raise ValueError('Can\'t read The image file {}!'.format(
+                    im_path))
         im = im.astype('float32')
         if label is not None:
             if isinstance(label, np.ndarray):
@@ -455,8 +457,7 @@ class ResizeByShort(SegTransform):
         im_short_size = min(im.shape[0], im.shape[1])
         im_long_size = max(im.shape[0], im.shape[1])
         scale = float(self.short_size) / im_short_size
-        if self.max_size > 0 and np.round(scale *
-                                          im_long_size) > self.max_size:
+        if self.max_size > 0 and np.round(scale * im_long_size) > self.max_size:
             scale = float(self.max_size) / float(im_long_size)
         resized_width = int(round(im.shape[1] * scale))
         resized_height = int(round(im.shape[0] * scale))
@@ -732,12 +733,12 @@ class Padding(SegTransform):
             im = np.zeros((im_height + pad_height, im_width + pad_width,
                            im_channel)).astype(orig_im.dtype)
             for i in range(im_channel):
-                im[:, :, i] = np.pad(
-                    orig_im[:, :, i],
-                    pad_width=((0, pad_height), (0, pad_width)),
-                    mode='constant',
-                    constant_values=(self.im_padding_value[i],
-                                     self.im_padding_value[i]))
+                im[:, :, i] = np.pad(orig_im[:, :, i],
+                                     pad_width=((0, pad_height),
+                                                (0, pad_width)),
+                                     mode='constant',
+                                     constant_values=(self.im_padding_value[i],
+                                                      self.im_padding_value[i]))
 
             if label is not None:
                 label = np.pad(label,
@@ -936,7 +937,7 @@ class RandomRotate(SegTransform):
                 存储与图像相关信息的字典和标注图像np.ndarray数据。
         """
         if self.rotate_range > 0:
-            (h, w) = im.shape[:2]
+            h, w, c = im.shape
             do_rotation = np.random.uniform(-self.rotate_range,
                                             self.rotate_range)
             pc = (w // 2, h // 2)
@@ -951,13 +952,18 @@ class RandomRotate(SegTransform):
             r[0, 2] += (nw / 2) - cx
             r[1, 2] += (nh / 2) - cy
             dsize = (nw, nh)
-            im = cv2.warpAffine(
-                im,
-                r,
-                dsize=dsize,
-                flags=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=self.im_padding_value)
+            rot_ims = list()
+            for i in range(0, c, 3):
+                ori_im = im[:, :, i:i + 3]
+                rot_im = cv2.warpAffine(
+                    ori_im,
+                    r,
+                    dsize=dsize,
+                    flags=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=self.im_padding_value[i:i + 3])
+                rot_ims.append(rot_im)
+            im = np.concatenate(rot_ims, axis=-1)
             label = cv2.warpAffine(
                 label,
                 r,
@@ -1119,12 +1125,18 @@ class RandomDistort(SegTransform):
             'saturation': self.saturation_prob,
             'hue': self.hue_prob
         }
-        for id in range(4):
-            params = params_dict[ops[id].__name__]
-            prob = prob_dict[ops[id].__name__]
-            params['im'] = im
-            if np.random.uniform(0, 1) < prob:
-                im = ops[id](**params)
+        dis_ims = list()
+        h, w, c = im.shape
+        for i in range(0, c, 3):
+            ori_im = im[:, :, i:i + 3]
+            for id in range(4):
+                params = params_dict[ops[id].__name__]
+                prob = prob_dict[ops[id].__name__]
+                params['im'] = ori_im
+                if np.random.uniform(0, 1) < prob:
+                    ori_im = ops[id](**params)
+            dis_ims.append(ori_im)
+        im = np.concatenate(dis_ims, axis=-1)
         im = im.astype('float32')
         if label is None:
             return (im, im_info)

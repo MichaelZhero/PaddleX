@@ -38,11 +38,6 @@ class Predictor:
         self.model_name = self.info['Model']
         self.num_classes = self.info['_Attributes']['num_classes']
         self.labels = self.info['_Attributes']['labels']
-        if self.info['Model'] == 'MaskRCNN':
-            if self.info['_init_params']['with_fpn']:
-                self.mask_head_resolution = 28
-            else:
-                self.mask_head_resolution = 14
         transforms_mode = self.info.get('TransformsMode', 'RGB')
         if transforms_mode == 'RGB':
             to_rgb = True
@@ -137,7 +132,7 @@ class Predictor:
     def preprocess(self, image):
         res = dict()
         if self.model_type == "classifier":
-            im, = self.transforms(image)
+            im = self.transforms(image)
             im = np.expand_dims(im, axis=0).copy()
             res['image'] = im
         elif self.model_type == "detector":
@@ -147,14 +142,6 @@ class Predictor:
                 im_shape = np.expand_dims(im_shape, axis=0).copy()
                 res['image'] = im
                 res['im_size'] = im_shape
-            if self.model_name.count('RCNN') > 0:
-                im, im_resize_info, im_shape = self.transforms(image)
-                im = np.expand_dims(im, axis=0).copy()
-                im_resize_info = np.expand_dims(im_resize_info, axis=0).copy()
-                im_shape = np.expand_dims(im_shape, axis=0).copy()
-                res['image'] = im
-                res['im_info'] = im_resize_info
-                res['im_shape'] = im_shape
         elif self.model_type == "segmenter":
             im, im_info = self.transforms(image)
             im = np.expand_dims(im, axis=0).copy()
@@ -181,13 +168,15 @@ class Predictor:
         """
         it = iter(self.net.outputs)
         next(it)
+        label_name = next(it)
+        label_map = np.squeeze(preds[label_name]).astype('uint8')
         score_name = next(it)
         score_map = np.squeeze(preds[score_name])
         score_map = np.transpose(score_map, (1, 2, 0))
-        label_name = next(it)
-        label_map = np.squeeze(preds[label_name]).astype('uint8')
+
         im_info = preprocessed_inputs['im_info']
-        for info in im_info[::-1]:
+
+        for info in im_info[0][::-1]:
             if info[0] == 'resize':
                 w, h = info[1][1], info[1][0]
                 label_map = cv2.resize(label_map, (w, h), cv2.INTER_NEAREST)
@@ -196,23 +185,21 @@ class Predictor:
                 w, h = info[1][1], info[1][0]
                 label_map = label_map[0:h, 0:w]
                 score_map = score_map[0:h, 0:w, :]
-            else:
-                raise Exception("Unexpected info '{}' in im_info".format(info[
-                    0]))
         return {'label_map': label_map, 'score_map': score_map}
 
     def detector_postprocess(self, preds, preprocessed_inputs):
         """对图像检测结果做后处理
         """
-        output_name = next(iter(self.net.outputs))
-        outputs = preds[output_name][0]
+        outputs = self.net.outputs
+        for name in outputs:
+            if (len(outputs[name].shape) == 2):
+                output = preds[name]
         result = []
-        for out in outputs:
-            if (out[0] > 0):
+        for out in output:
+            if (out[0] >= 0):
                 result.append(out.tolist())
             else:
                 pass
-        print(result)
         return result
 
     def predict(self, image, topk=1, threshold=0.5):

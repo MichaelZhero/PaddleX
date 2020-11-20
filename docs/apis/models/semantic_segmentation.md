@@ -13,7 +13,7 @@ paddlex.seg.DeepLabv3p(num_classes=2, backbone='MobileNetV2_x1.0', output_stride
 > > - **num_classes** (int): 类别数。
 > > - **backbone** (str): DeepLabv3+的backbone网络，实现特征图的计算，取值范围为['Xception65', 'Xception41', 'MobileNetV2_x0.25', 'MobileNetV2_x0.5', 'MobileNetV2_x1.0', 'MobileNetV2_x1.5', 'MobileNetV2_x2.0', 'MobileNetV3_large_x1_0_ssld']，默认值为'MobileNetV2_x1.0'。
 > > - **output_stride** (int): backbone 输出特征图相对于输入的下采样倍数，一般取值为8或16。默认16。
-> > - **aspp_with_sep_conv** (bool):  decoder模块是否采用separable convolutions。默认True。
+> > - **aspp_with_sep_conv** (bool):  aspp模块是否采用separable convolutions。默认True。
 > > - **decoder_use_sep_conv** (bool)： decoder模块是否采用separable convolutions。默认True。
 > > - **encoder_with_aspp** (bool): 是否在encoder阶段采用aspp模块。默认True。
 > > - **enable_decoder** (bool): 是否使用decoder模块。默认True。
@@ -137,7 +137,6 @@ overlap_tile_predict(self, img_file, tile_size=[512, 512], pad_size=[64, 64], ba
 > **返回值**
 > >
 > > - **dict**: 包含关键字'label_map'和'score_map', 'label_map'存储预测结果灰度图，像素值表示对应的类别，'score_map'存储各类别的概率，shape=(h, w, num_classes)。
-
 
 ## paddlex.seg.UNet
 

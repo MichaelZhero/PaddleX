@@ -215,7 +215,13 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
             url = image_pretrain[backbone]
             fname = osp.split(url)[-1].split('.')[0]
             paddlex.utils.download_and_decompress(url, path=new_save_dir)
-            return osp.join(new_save_dir, fname)
+            if not osp.exists(osp.join(new_save_dir, fname)):
+                for f in os.listdir(new_save_dir):
+                    dir_name = osp.join(new_save_dir, f)
+                    if osp.isdir(dir_name) and fname.split('_')[0] in dir_name:
+                        return dir_name
+            else:
+                return osp.join(new_save_dir, fname)
 
         import paddlehub as hub
         try:
@@ -255,7 +261,13 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
 
         if getattr(paddlex, 'gui_mode', False):
             paddlex.utils.download_and_decompress(url, path=new_save_dir)
-            return osp.join(new_save_dir, fname)
+            if not osp.exists(osp.join(new_save_dir, fname)):
+                for f in os.listdir(new_save_dir):
+                    dir_name = osp.join(new_save_dir, f)
+                    if osp.isdir(dir_name) and fname.split('_')[0] in dir_name:
+                        return dir_name
+            else:
+                return osp.join(new_save_dir, fname)
 
         import paddlehub as hub
         try:
@@ -267,10 +279,10 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
                 "Couldn't download pretrain weight, you can download it manualy from {} (decompress the file if it is a compressed file), and set pretrain weights by your self".
                 format(url),
                 exit=False)
-            if isinstance(hub.ResourceNotFoundError):
+            if isinstance(e, hub.ResourceNotFoundError):
                 raise Exception("Resource for backbone {} not found".format(
                     backbone))
-            elif isinstance(hub.ServerConnectionError):
+            elif isinstance(e, hub.ServerConnectionError):
                 raise Exception(
                     "Cannot get reource for backbone {}, please check your internet connection"
                     .format(backbone))
@@ -288,7 +300,13 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
 
         if getattr(paddlex, 'gui_mode', False):
             paddlex.utils.download_and_decompress(url, path=new_save_dir)
-            return osp.join(new_save_dir, fname)
+            if not osp.exists(osp.join(new_save_dir, fname)):
+                for f in os.listdir(new_save_dir):
+                    dir_name = osp.join(new_save_dir, f)
+                    if osp.isdir(dir_name) and fname.split('_')[0] in dir_name:
+                        return dir_name
+            else:
+                return osp.join(new_save_dir, fname)
 
         import paddlehub as hub
         try:
@@ -300,10 +318,10 @@ def get_pretrain_weights(flag, class_name, backbone, save_dir):
                 "Couldn't download pretrain weight, you can download it manualy from {} (decompress the file if it is a compressed file), and set pretrain weights by your self".
                 format(url),
                 exit=False)
-            if isinstance(hub.ResourceNotFoundError):
+            if isinstance(e, hub.ResourceNotFoundError):
                 raise Exception("Resource for backbone {} not found".format(
                     backbone))
-            elif isinstance(hub.ServerConnectionError):
+            elif isinstance(e, hub.ServerConnectionError):
                 raise Exception(
                     "Cannot get reource for backbone {}, please check your internet connection"
                     .format(backbone))
